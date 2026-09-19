@@ -1,0 +1,94 @@
+/* 全局基础样式。深色主题:看图工具长时间盯着图像,浅色界面会干扰判读。 */
+
+:root {
+  color-scheme: dark;
+
+  --bg: #16181b;
+  --panel: #23262b;
+  --border: #33383f;
+  --text: #d6dae0;
+  --text-dim: #9aa3ae;
+  --text-faint: #6c757f;
+  --accent: #3f78c4;
+
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC',
+    'Hiragino Sans GB', 'Microsoft YaHei', Roboto, sans-serif;
+  font-size: 14px;
+  line-height: 1.5;
+  color: var(--text);
+  background: var(--bg);
+
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#app {
+  margin: 0;
+  padding: 0;
+  height: 100%;
+  overflow: hidden;
+}
+
+/* 桌面应用里选中文字没有意义,而且拖动时会意外选中界面文字 */
+body {
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+/* 但输入框必须可选中,否则没法改数字 */
+input,
+textarea {
+  user-select: text;
+  -webkit-user-select: text;
+}
+
+/* 数字输入框的上下箭头在深色主题下很难看,而且这里都是精确输入,
+   微调按钮没有价值 */
+input[type='number']::-webkit-outer-spin-button,
+input[type='number']::-webkit-inner-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
+}
+
+input[type='number'] {
+  -moz-appearance: textfield;
+  appearance: textfield;
+}
+
+/* 滚动条 */
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: #3a3f47;
+  border-radius: 5px;
+  border: 2px solid var(--panel);
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: #4a5059;
+}
+
+/* OpenSeadragon 自带控件的配色覆盖。
+   它默认的浅色按钮在深色背景上很突兀。 */
+.openseadragon-container .navigator {
+  border: 1px solid var(--border) !important;
+  background: #1c1f23 !important;
+}
+
+.openseadragon-container .navigator .displayregion {
+  border: 2px solid var(--accent) !important;
+  background: rgba(63, 120, 196, 0.15) !important;
+}
