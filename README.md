@@ -1,7 +1,174 @@
-# Tauri + Vue + TypeScript
+# bigImgPin
 
-This template should help get you started developing with Vue 3 and TypeScript in Vite. The template uses Vue 3 `<script setup>` SFCs, check out the [script setup docs](https://v3.vuejs.org/api/sfc-script-setup.html#sfc-script-setup) to learn more.
+面向**十亿像素级**大图的查看与定位工具。把几个 GB 到几十 GB 的整幅图像切成瓦片金字塔,
+像看地图一样缩放浏览,并按坐标精确定位到指定区域。
 
-## Recommended IDE Setup
+Tauri 2 + Rust + Vue 3,跨平台(macOS / Windows / Linux)。
 
-- [VS Code](https://code.visualstudio.com/) + [Vue - Official](https://marketplace.visualstudio.com/items?itemName=Vue.volar) + [Tauri](https://marketplace.visualstudio.com/items?itemName=tauri-apps.tauri-vscode) + [rust-analyzer](https://marketplace.visualstudio.com/items?itemName=rust-lang.rust-analyzer)
+## 为什么需要它
+
+举例:一张 **41041 × 49841** 的图,约 **20.5 亿像素**:
+
+- **整图解码装不下。** 按 8 位 RGB 展开约 6 GB,ARGB 约 8 GB —— 还没算解码器自己的中间缓冲。
+- **单张纹理超 GPU 上限。** 常见 GPU 单维纹理上限是 8192 或 16384 像素,41041 是后者的 2.5 倍,
+  整图作为一张纹理提交会直接失败。
+- **常规软件无响应。** 多数看图工具的处理方式是「整图读进内存再显示」,于是长时间卡死、
+  爆内存被系统杀掉,或者干脆报「文件过大」。
+
+所以大图不能「打开」,只能**按视野分块、按需加载**。bigImgPin 不试图把整图放进内存,
+而是把它变成一张可以漫游的地图。
+
+## 它能做什么
+
+### 浏览
+
+- 打开图片后自动切片并浏览(首次要等,之后命中缓存秒开)
+- 拖动平移、滚轮缩放(1.4× 步进),「适应窗口」「1:1」一键到位
+- 右下角常驻小地图(导航器),随时知道自己在整图的哪个位置
+- 自动网格:按 1-2-5 序列随缩放换挡,左上角标注当前格宽 `网格 N px`
+- 状态栏实时显示**光标处的图像坐标**(2 位小数)、图像尺寸与像素总量、缩放比例、
+  当前网格步长、框数量、本次图像的瓦片缓存占用
+- 切片过程可随时「取消」
+
+### 定位
+
+两种方式,都基于**图像像素坐标**:
+
+1. **按 x / y / w / h 定位区域。** 右侧「坐标输入」填 x、y、w、h,生成对应的框。
+   还可以填「偏移与系数 k」做一次线性变换再生成:
+
+   ```
+   x' = (x + 偏移x) · k
+   y' = (y + 偏移y) · k
+   w' = w · k
+   h' = h · k
+   ```
+
+   适合「在一个坐标系里量好尺寸、换到另一个坐标系里标注」的场景。生成前有实时预览,
+   结果超出图像范围会给出提示。
+
+2. **跳回框的位置。** 框列表里每个框有「定位」按钮:框能完整放下就平移居中,
+   放不下就自动缩放到刚好容纳。在 20 亿像素的图上,这是从一堆框里回到某一个框的
+   实用方式。
+
+辅助手段:
+
+- **双击**放置一条横向辅助线,**Shift + 双击**放置竖向 —— 用来比对同一 y 或同一 x 上的结构
+- 画框模式(✛)下拖拽空白处新建框;拖拽已有框可整体平移(不改尺寸)
+- 每个框自动分配颜色,便于区分
+
+> 框和辅助线目前只存在于内存,换图即清空。详见文末「已知限制」。
+
+## 技术栈
+
+| 层 | 选型 | 为什么 |
+|---|---|---|
+| 桌面外壳 | Tauri 2 | 用系统 WebView,不捆 Chromium,包体与常驻内存都小一个量级 |
+| 后端 | Rust | 切片、缓存、协议、进度全在这里 |
+| 切片 | 外部 `libvips` 二进制 | `dzsave` 直接产出 DZI 金字塔,多线程、内存可控 |
+| 前端 | Vue 3 + TypeScript + Vite | |
+| 瓦片渲染 | OpenSeadragon(canvas drawer) | |
+| 叠加层 | 自绘 SVG(屏幕空间) | 线宽恒为 2px,不随缩放变成色块 |
+
+## 关键原理:瓦片金字塔
+
+### 一次切片
+
+`vips dzsave` 把整图按 2 的幂逐级降采样,每一级再切成固定大小的瓦片,产出标准 DZI:
+
+```
+image.dzi            # 描述符:格式、瓦片尺寸、原图宽高
+image_files/
+  ├─ 0/  …           # 全分辨率(最大的一层)
+  ├─ 1/  …           # 1/2
+  ├─ 2/  …           # 1/4
+  └─ …
+```
+
+仍以这张 41041 × 49841 的图为例:瓦片 1024 px,全分辨率那一层是 41 × 49 = **2009 张**,
+整个金字塔共 **2748 个瓦片文件**。前端只按当前视野和缩放级别请求需要的那几十张,
+所以**图有多大都不影响交互**——一次视野变化只跟瓦片尺寸和磁盘速度有关。
+
+### 为什么瓦片是 1024,而不是 DZI 惯用的 256
+
+瓦片越大压缩率越高(同一块内容的上下文更多),但解码后占的内存也越大。
+1024 是实测折中。作为参照:1024 × 1024 的瓦片解码后是 4 MB,而全分辨率那一层
+全部展开要 8 GB —— 所以前端只保留最近用过的 80 张(约 320 MB)。
+
+### 为什么默认 WebP 无损,不用 JPEG 或 PNG
+
+- 比 PNG 小约 **35%**,而逐像素相减最大差值为 **0**(真正无损)
+- **不用 JPEG**:目标图是边缘锐利的版图类图像,JPEG 会在每条边产生振铃伪影,
+  而那可能被当成真实结构读出来。对一个用来「看结构」的工具,这是不可接受的
+
+### 缓存
+
+切片结果落在 `app_local_data_dir()/tiles/<cache_key>/`:
+
+- `cache_key = hash(路径, 文件大小, mtime, 切片参数)`。切片参数**必须**进 hash,
+  否则改了瓦片尺寸或格式会命中旧缓存、拿到尺寸不符的瓦片,表现为图像错位。
+- 落盘走 `.tmp-<id>-<pid>/` → 原子 rename,中途崩溃不会留下被误判成「命中」的半成品。
+- 命中判定要求 `image.dzi` 和 `image_files/` 同时存在。
+- 同一张图第二次打开直接命中,状态栏会标 `(已缓存)`。
+
+### 瓦片怎么送到前端
+
+不用 Tauri 内置的 asset 协议,而是自实现 `bigimgpin://` 自定义协议
+(Windows/Android 上是 `http://bigimgpin.localhost`),只暴露缓存根目录,
+把 MIME、缓存头、404 语义都握在自己手里 —— 出问题时前端看到的是明确的 HTTP 状态码,
+而不是一块没有解释的白。
+
+### 进度
+
+切片期间 `tile-progress` 有两条来源并行:vips 自己报的百分比(`VIPS_PROGRESS=1`,
+从 stdout 解析),以及数已落盘瓦片文件的兜底估算。多线程下 vips 的进度可能不平滑,
+前端取两者较大值,避免数字回退。
+
+## 运行
+
+需要 **libvips** —— 它是外部二进制,不是链接进来的库:
+
+```bash
+brew install vips          # macOS
+```
+
+启动时按「随包捆绑 →`BIGIMGPIN_VIPS` 环境变量 → macOS brew 路径 → PATH」的顺序查找;
+找不到会直接在界面上给出安装提示。
+
+```bash
+git clone https://github.com/Sapphire611/bigImgPin.git
+cd bigImgPin
+npm install
+npm run dev                # 开发(自动起 vite,端口固定 1420)
+npm run dev:web            # 只起前端(纯浏览器里没有 Tauri API,invoke 全会失败)
+npm run build              # 类型检查 + 打包前端
+npx tauri build            # 打包桌面应用
+cargo test                 # Rust 单测(在 src-tauri/ 下)
+```
+
+可打开的格式:jpg / jpeg / png / tif / tiff / bmp / webp / vips。
+libvips 能解的格式远不止这些,选择器里列的是常用几种。
+
+## 项目结构
+
+```
+src/
+  api/tauri.ts            # 所有 invoke 与事件监听都封在这里,组件只 import 它
+  osd/coords.ts           # 图像坐标 ↔ 屏幕坐标的唯一出口
+  osd/useViewer.ts        # OpenSeadragon 实例与配置
+  osd/useAnnotationSvg.ts # 网格 / 辅助线 / 框 / 预览框,一整层屏幕空间 SVG
+  components/             # ToolBar / StatusBar / RectPanel
+  App.vue                 # 状态与交互编排
+src-tauri/src/
+  commands.rs             # 切片、缓存、进度、取消
+  vips.rs                 # vips 定位与 dzsave 调用
+  tiles_protocol.rs       # 自定义协议与 URL 前缀的唯一收敛点
+  lib.rs                  # 命令注册
+```
+
+## 已知限制
+
+- **标注不落盘。** 框和辅助线只在内存里,换图即清空,没有保存 / 导出 / 导入。
+- **框只能整体平移,不能改尺寸**,也没有名称或标签。
+- **没有撤销,没有键盘快捷键**(唯一修饰键用法是 Shift + 双击放竖辅助线)。
+- 网格步长自动计算,不可手调;切片参数(瓦片尺寸 / 格式)也还没开放到界面。
