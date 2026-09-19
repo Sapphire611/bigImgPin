@@ -12,7 +12,7 @@ use tauri::http::{self, StatusCode};
 use tauri::{Runtime, UriSchemeContext, UriSchemeResponder};
 
 /// 协议名。前端拼 URL 时必须用这个。
-pub const SCHEME: &str = "bigimage";
+pub const SCHEME: &str = "bigimgpin";
 
 /// URL 前缀的**唯一收敛点**。
 ///
@@ -21,9 +21,9 @@ pub const SCHEME: &str = "bigimage";
 /// 所以整个代码库里只允许这一个地方做这个判断。
 pub fn protocol_origin() -> &'static str {
     if cfg!(windows) {
-        "http://bigimage.localhost"
+        "http://bigimgpin.localhost"
     } else {
-        "bigimage://localhost"
+        "bigimgpin://localhost"
     }
 }
 
@@ -201,9 +201,9 @@ mod tests {
     fn origin_matches_platform() {
         let origin = protocol_origin();
         if cfg!(windows) {
-            assert_eq!(origin, "http://bigimage.localhost");
+            assert_eq!(origin, "http://bigimgpin.localhost");
         } else {
-            assert_eq!(origin, "bigimage://localhost");
+            assert_eq!(origin, "bigimgpin://localhost");
         }
     }
 }

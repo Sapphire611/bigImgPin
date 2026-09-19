@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## 项目概览
 
-bigImage 是一个超大图查看与标注工具(Tauri 2 + Vue 3 + TypeScript)。Rust 侧调用外部
+bigImgPin 是一个超大图查看与标注工具(Tauri 2 + Vue 3 + TypeScript)。Rust 侧调用外部
 libvips 把任意大图切成 DZI 瓦片金字塔并缓存,前端用 OpenSeadragon 浏览瓦片,在
 SVG 叠加层上画标注框和辅助线。目标图是数十亿像素级的版图/显微类图像。
 
@@ -32,7 +32,7 @@ cargo test cache_key_changes_with_slice_params   # 单个测试
 ## 运行前置:libvips
 
 vips 是**外部二进制,不是链接进来的库**,运行时才定位(见 `src-tauri/src/vips.rs`
-的 `resolve_vips`)。查找顺序:随包捆绑 → `BIGIMAGE_VIPS` 环境变量 → macOS brew 的
+的 `resolve_vips`)。查找顺序:随包捆绑 → `BIGIMGPIN_VIPS` 环境变量 → macOS brew 的
 硬编码路径 → PATH。
 
 第 3 步不是冗余的:macOS 上从 Finder 双击启动的 .app 不继承 shell 的 PATH,brew 装的
@@ -51,7 +51,7 @@ prepare_image(path) → 命中缓存秒回 / 否则跑 vips dzsave(可能几分�
    ├─ 期间 emit tile-progress
    └─ 返回 PreparedImage{ id, width, height, tileSize, tilesUrl, ... }
 前端 useViewer.load() 用这份元数据直接构造 DziTileSource
-瓦片通过自定义协议 bigimage://localhost/tiles/<id>/image_files/... 加载
+瓦片通过自定义协议 bigimgpin://localhost/tiles/<id>/image_files/... 加载
 ```
 
 前后端的类型契约:Rust `commands::PreparedImage` ↔ `src/types.ts` 的 `PreparedImage`,
@@ -65,7 +65,7 @@ serde 用 `rename_all = "camelCase"`。改一边必须改另一边。
 ### 自定义协议(易错)
 
 `src-tauri/src/tiles_protocol.rs` 的 `protocol_origin()` 是 URL 前缀的**唯一收敛点**:
-Windows/Android 上是 `http://bigimage.localhost`,其他平台是 `bigimage://localhost`。
+Windows/Android 上是 `http://bigimgpin.localhost`,其他平台是 `bigimgpin://localhost`。
 两处不一致会导致其中一个平台静默白屏。任何地方都不要再写第二次这个判断。
 
 不用 Tauri 内置 asset 协议的原因(见文件头注释):glob scope 在各平台缓存目录形态不一,

@@ -51,7 +51,7 @@ pub fn resolve_vips(app: &tauri::AppHandle) -> Result<PathBuf, String> {
     }
 
     // 2) 显式覆盖(调试用,也能救急)
-    if let Ok(p) = std::env::var("BIGIMAGE_VIPS") {
+    if let Ok(p) = std::env::var("BIGIMGPIN_VIPS") {
         let p = PathBuf::from(p);
         if p.is_file() {
             return Ok(p);
@@ -77,7 +77,7 @@ pub fn resolve_vips(app: &tauri::AppHandle) -> Result<PathBuf, String> {
          \n\
          macOS:    brew install vips\n\
          Windows:  请确认安装目录下 vips-win64/bin/{exe_name} 存在\n\
-         其他:     可设环境变量 BIGIMAGE_VIPS 指向可执行文件"
+         其他:     可设环境变量 BIGIMGPIN_VIPS 指向可执行文件"
     ))
 }
 
