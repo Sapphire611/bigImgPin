@@ -107,9 +107,9 @@ pub fn vips_info(app: AppHandle) -> Result<VipsInfo, String> {
         version,
         path: vips.display().to_string(),
         has_dzsave,
-        header_path: vips
-            .parent()
-            .map(|dir| dir.join("vipsheader").display().to_string()),
+        // 从 vipsheader_path 推导,不要手拼:Windows 上真正的文件名是 vipsheader.exe,
+        // 手拼出来的路径在那边根本不存在(前端虽然还没消费这个字段,但报假路径迟早坑人)。
+        header_path: Some(vips::vipsheader_path(&vips).display().to_string()),
     })
 }
 

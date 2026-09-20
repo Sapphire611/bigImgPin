@@ -34,7 +34,7 @@ src-tauri/target
 !src-tauri/icons/*.png
 !public/**/*.png
 
-# 打包进 Windows 安装包的 libvips(约 150MB 解压后)
+# 打包进 Windows 安装包的 libvips(精简后约 43MB;只删了 include/ 和 lib/*.lib|.def 这类开发件)
 src-tauri/resources/vips-win64/
 
 # 切片实测的临时产物

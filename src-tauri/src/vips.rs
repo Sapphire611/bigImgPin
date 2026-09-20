@@ -89,7 +89,10 @@ fn which(name: &str) -> Option<PathBuf> {
 }
 
 /// vipsheader 与 vips 同目录分发,所以从 vips 的位置推导它,而不是单独查 PATH。
-fn vipsheader_path(vips: &Path) -> PathBuf {
+///
+/// 是 `pub(crate)` 而不只是私有:谁要报这个路径都得从这里拿,自己拼会在 Windows
+/// 上漏掉 `.exe`(调用处曾经就是这么错的)。
+pub(crate) fn vipsheader_path(vips: &Path) -> PathBuf {
     let name = if cfg!(windows) {
         "vipsheader.exe"
     } else {
