@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import type { ToolMode } from '../types'
+import UpdatePrompt from './UpdatePrompt.vue'
 
 defineProps<{
   mode: ToolMode
@@ -62,6 +63,8 @@ const emit = defineEmits<{
     <button :disabled="!hasImage" title="缩放到 100%(图像 1 像素 = 屏幕 1 像素)" @click="emit('zoomToOne')">
       1:1
     </button>
+
+    <UpdatePrompt />
   </div>
 </template>
 

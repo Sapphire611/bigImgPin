@@ -1,6 +1,7 @@
 /** Rust 命令与事件的类型化封装。前端不直接 import invoke。 */
 import { invoke } from '@tauri-apps/api/core'
 import { listen, type UnlistenFn } from '@tauri-apps/api/event'
+import { check } from '@tauri-apps/plugin-updater'
 
 import type { PreparedImage, SliceParams, TileProgress, VipsInfo, VipsStatus } from '../types'
 
@@ -45,6 +46,60 @@ export function onVipsStatus(
   handler: (status: VipsStatus) => void,
 ): Promise<UnlistenFn> {
   return listen<VipsStatus>('vips-status', (event) => handler(event.payload))
+}
+
+// ---------------------------------------------------------------- 更新
+
+/**
+ * 一个已发现的新版本。
+ *
+ * 拆成 download / install 两步而不是用插件的 downloadAndInstall,
+ * 是为了让下载在后台静默完成,等用户点了才安装 —— 安装会直接退出当前进程。
+ */
+export interface AvailableUpdate {
+  version: string
+  currentVersion: string
+  /** 更新说明,可能为空 */
+  notes: string
+  /** 静默下载。onProgress 的百分比在服务器没报总大小时为 null。 */
+  download(onProgress: (percent: number | null, downloadedBytes: number) => void): Promise<void>
+  /** 安装并重启。Windows 上调用后当前进程直接退出,安装器装完会把新版拉起来。 */
+  install(): Promise<void>
+}
+
+/** 已是最新版时返回 null。 */
+export async function checkForUpdate(): Promise<AvailableUpdate | null> {
+  const update = await check()
+  if (!update) return null
+
+  let downloadedBytes = 0
+  let totalBytes: number | null = null
+
+  return {
+    version: update.version,
+    currentVersion: update.currentVersion,
+    notes: update.body ?? '',
+    async download(onProgress) {
+      try {
+        await update.download((event) => {
+          if (event.event === 'Started') {
+            totalBytes = event.data.contentLength ?? null
+          } else if (event.event === 'Progress') {
+            downloadedBytes += event.data.chunkLength
+            onProgress(
+              totalBytes ? Math.round((downloadedBytes / totalBytes) * 100) : null,
+              downloadedBytes,
+            )
+          }
+        })
+      } catch (error) {
+        // 失败时把 Rust 侧那份已下载的数据放掉,否则反复重试会一直堆着
+        await update.close()
+        throw error
+      }
+    },
+    install: () => update.install(),
+  }
 }
 
 /** 人类可读的字节数。 */

@@ -11,6 +11,10 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_process::init())
+        // 更新逻辑全在前端(见 src/components/UpdatePrompt.vue),
+        // Rust 侧只负责下载、验签和调起安装器
+        .plugin(tauri_plugin_updater::Builder::new().build())
         .manage(commands::SliceState::default())
         // 异步版:vips 瓦片是磁盘 IO,同步版在 macOS 上会跑在主线程并掉帧
         .register_asynchronous_uri_scheme_protocol(tiles_protocol::SCHEME, tiles_protocol::handle)

@@ -1,7 +1,7 @@
 {
   "name": "bigimgpin",
   "private": true,
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Desktop viewer and annotator for gigapixel industrial imagery (layout / microscopy). Ships with its own libvips runtime.",
   "type": "module",
   "scripts": {
@@ -9,12 +9,15 @@
     "dev:web": "vite",
     "build": "vue-tsc --noEmit && vite build",
     "preview": "vite preview",
+    "release": "node scripts/release.mjs",
     "tauri": "tauri"
   },
   "dependencies": {
     "@tauri-apps/api": "^2",
     "@tauri-apps/plugin-dialog": "^2.7.3",
     "@tauri-apps/plugin-opener": "^2",
+    "@tauri-apps/plugin-process": "^2.3.1",
+    "@tauri-apps/plugin-updater": "^2.12.0",
     "openseadragon": "^6.1.1",
     "vue": "^3.5.13"
   },

@@ -18,7 +18,8 @@ npm run dev              # tauri dev(会自动起 vite,端口 1420 固定)
 npm run dev:web          # 只起 vite。纯浏览器里没有 Tauri API,invoke 全都会失败
 npm run build            # vue-tsc --noEmit && vite build
 npx vue-tsc --noEmit     # 只做类型检查(前端没有 test runner,这是最轻的验证手段)
-npx tauri build          # 打包
+npx tauri build          # 打包。没给签名私钥会以退出码 1 结束(安装包其实已经出来了)
+npm run release          # 发版:签名构建 + 生成 latest.json + 建 GitHub Release
 
 # Rust 单元测试(在 src-tauri/ 下,或在仓库根加 --manifest-path src-tauri/Cargo.toml)
 cargo test
@@ -146,6 +147,60 @@ reflow。重绘路径可以照抄 `draw()`。
 
 `parse_percent` **刻意不匹配任何前缀** —— 实际输出前缀是临时图像名(如 `vips temp-3:`),
 不是操作名,而且名字会变。有测试用 `temp-3` 守着,防止有人「修正」成匹配 `dzsave`。
+
+## 自动更新与发版
+
+用官方 `tauri-plugin-updater`,**全量包**(NSIS 约 15MB,里面 10MB 是压过的 vips 树)。
+更新源是 GitHub Releases 上的 `latest.json`,配在 `tauri.conf.json` 的
+`plugins.updater.endpoints`。没做按文件增量:省下的那 12MB 不值当自己写一套
+下载/替换/回滚,还得处理 Windows 上自替换的坑。
+
+流程:**启动 3 秒后静默检查 → 后台下载 → 弹窗 → 用户点「立即重启」→ 安装 → 自动开回新版**。
+前端逻辑全在 `src/components/UpdatePrompt.vue`,Rust 侧只注册插件(下载、验签、调起
+安装器都是插件干的,见 `lib.rs`)。
+
+几个不能动的点:
+
+- `installMode: "quiet"` 让安装器收到 `/S /UPDATE /R`。**`/R` 是「装完自己开回来」的关键**:
+  NSIS 模板的 `.onInstSuccess` 只在静默/被动模式且带 `/R` 时才 `RunAsUser` 拉起应用。
+  去掉它,用户就得自己去开始菜单点一遍,正是要避免的事。
+- 必须**先 download 再 install**,不能用 `downloadAndInstall` —— 安装会直接结束当前进程,
+  得等用户点头。包下好了但用户点了「稍后」,再点按钮是把弹窗调出来,不重新下。
+- dev 下只检查不安装:跑的是 `target/debug` 里的 exe,装下去会把正在调试的产物换掉。
+- 签名私钥在 `~/.tauri/bigimgpin.key`,**不在仓库里也不该进仓库**。它丢了就再也签不出
+  客户端认的更新包,只能让所有用户重装。
+
+**具体操作步骤**(发版前查什么、怎么验证更新真的生效、常见故障对照)在
+`.claude/skills/release/SKILL.md`,本节只留设计决策和坑。
+
+发版就是两步:
+
+```bash
+# 先改 src-tauri/tauri.conf.json 里的 version
+npm run release -- --notes "这次改了什么"
+```
+
+`scripts/release.mjs` 会带着私钥路径构建、生成 `latest.json`、用 `gh` 建 Release 上传。
+前置:装 GitHub CLI(`winget install --id GitHub.cli`)并 `gh auth login`。
+加 `--dry-run` 可以从现有产物生成 `latest.json` 并列出要传的文件,不构建也不上传。
+
+**`createUpdaterArtifacts` 开着但没给私钥时,`tauri build` 会以退出码 1 结束** ——
+安装包(msi/nsis)照样产出,只是没有 `.nsis.zip` 和 `.sig`。报错只有一行
+`A public key has been found, but no private key`。不知道这条的话很容易以为构建坏了。
+
+签名要同时给两个环境变量,缺一不可(`release.mjs` 已经处理好):
+
+- `TAURI_SIGNING_PRIVATE_KEY` 传**密钥内容**,不是路径。传
+  `TAURI_SIGNING_PRIVATE_KEY_PATH` 实测不生效,表现就是「no private key」。
+- `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` **密钥没设密码也要给个空串**。CLI 只要看不到
+  这个变量就一律弹密码提示,而它在非交互环境里不报错,是**永久挂住等 stdin** ——
+  表现为构建卡在 `Decrypting updater signing key, expect a prompt for password` 不动。
+
+`latest.json` 这个文件名写死在 endpoint URL 里(`releases/latest/download/latest.json`),
+不能改。客户端只认里面的 minisign 签名,公钥在 `tauri.conf.json`。
+
+打包另有一个坑:图标是**编译期**嵌进 exe 的(`build.rs` 里那行 `rerun-if-changed=icons`
+就是为它加的)。换图标后不重新构建,exe 里还是旧图标。
 
 ## 仓库卫生
 
