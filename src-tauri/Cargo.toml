@@ -1,7 +1,7 @@
 [package]
 name = "bigimgpin"
 version = "0.1.0"
-description = "Large image viewer and annotator"
+description = "Desktop viewer and annotator for gigapixel industrial imagery (layout / microscopy). Ships with its own libvips runtime."
 authors = ["you"]
 edition = "2021"
 

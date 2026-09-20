@@ -25,6 +25,11 @@
   "bundle": {
     "active": true,
     "targets": "all",
+    "shortDescription": "面向十亿像素级工业图像的桌面查看与标注工具(自带 libvips,免配置)",
+    "longDescription": "离线桌面端的超大图浏览与标注工具,面向工业版图、显微影像一类的十亿像素级图像。\n自带 libvips 运行时,装完即用,无需自行安装或配置任何依赖。\n本机把原图切成 DZI 瓦片金字塔并缓存,按视野按需加载,不把整图放进内存,因此图有多大都不影响交互。\n支持按图像像素坐标定位(x/y/w/h,可带偏移与系数换算)、标注框与辅助线、自适应网格与小地图。全程本地运行,图像不出本机。",
+    "resources": {
+      "resources/vips-win64": "vips-win64"
+    },
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",
