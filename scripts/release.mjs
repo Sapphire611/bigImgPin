@@ -73,6 +73,9 @@ if (!dryRun) {
 
   console.log(`发版 ${tag}`)
   run('npx', ['tauri', 'build'], {
+    // shell:true 在 Windows 上是**必需**的:npx 是 .cmd,而 Node 20 起拒绝用
+    // execFileSync 直接起 .cmd(安全加固)。代价是 Node 会打一行 DEP0190 弃用警告 ——
+    // 这里的参数全是写死的,没有注入面。别为了消警告把它去掉,去掉就发不了版。
     shell: true,
     env: {
       ...process.env,
