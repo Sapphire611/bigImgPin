@@ -19,7 +19,7 @@ import { onBeforeUnmount } from 'vue'
 import OpenSeadragon from 'openseadragon'
 
 import type { Guide, Rect, Region } from '../types'
-import { imageToScreenTransform, visibleImageRect } from './coords'
+import { imageToScreenTransform, visibleImageRect, type HandleId } from './coords'
 
 const SVG_NS = 'http://www.w3.org/2000/svg'
 
@@ -30,6 +30,13 @@ const GRID_MIN_SCREEN_PX = 40
 const GRID_MAX_SCREEN_PX = 200
 /** 单方向最多画多少条网格线。极端缩放下的保险丝。 */
 const GRID_MAX_LINES = 300
+
+/** 缩放手柄的边长(屏幕像素)。屏幕空间绘制的一个红利:它不随缩放变大变小。 */
+const HANDLE_SIZE = 9
+/** 命中判定往外放宽多少。9px 的方块正好卡着边缘点很难受,而手柄之间也不挤。 */
+const HANDLE_SLOP = 3
+
+const HANDLE_IDS: HandleId[] = ['nw', 'n', 'ne', 'e', 'se', 's', 'sw', 'w']
 
 export interface GridState {
   enabled: boolean
@@ -50,7 +57,18 @@ export function useAnnotationSvg(
 
   let regions: Region[] = []
   let guides: Guide[] = []
+  let selection: Set<string> = new Set()
+  /** 画不画缩放手柄。拖动模式下不画 —— 那时拖拽是平移画面,画着几个拖不动的方块是在骗人。 */
+  let handlesVisible = false
   let draft: Rect | null = null
+
+  /**
+   * 选中框那八个手柄在**屏幕坐标**里的位置,draw 的时候顺手算好。
+   *
+   * 命中检测必须和绘制用同一份坐标 —— 分开各算一次,迟早会出现
+   * 「看着在手柄上、点下去却没反应」,而且只在某些缩放比例下出现。
+   */
+  let handlePoints: Array<{ id: HandleId; x: number; y: number }> = []
   let grid: GridState = { enabled: true, step: GRID_BASE_STEP, color: '#5b8dd9' }
   /** 当前实际生效的网格间距,随缩放变化,显示给用户看 */
   let effectiveStep = GRID_BASE_STEP
@@ -190,6 +208,10 @@ export function useAnnotationSvg(
 
   function drawRegions(transform: ReturnType<typeof imageToScreenTransform> & object) {
     regionLayer.replaceChildren()
+    handlePoints = []
+
+    // 只有恰好选中一个时才画手柄。多选时给每个框都画八个手柄,既看不清也不好点
+    const soleSelected = handlesVisible && selection.size === 1 ? [...selection][0] : null
 
     const fragment = document.createDocumentFragment()
     for (const region of regions) {
@@ -197,6 +219,7 @@ export function useAnnotationSvg(
       const y = transform.y(region.y)
       const width = transform.x(region.x + region.w) - x
       const height = transform.y(region.y + region.h) - y
+      const selected = selection.has(region.id)
 
       const rect = document.createElementNS(SVG_NS, 'rect')
       rect.setAttribute('x', String(x))
@@ -205,13 +228,26 @@ export function useAnnotationSvg(
       rect.setAttribute('height', String(Math.max(height, 1)))
       rect.setAttribute('fill', 'none')
       rect.setAttribute('stroke', region.color)
-      // 屏幕空间绘制 => 线宽恒为 2px,不会随缩放变成一片色块
-      rect.setAttribute('stroke-width', '2')
+      // 屏幕空间绘制 => 线宽恒定,不会随缩放变成一片色块。
+      // 选中就加粗一倍:框本身已经占掉了颜色这个维度,线宽是唯一不用新配色
+      // 又能一眼看出来的信号
+      rect.setAttribute('stroke-width', selected ? '4' : '2')
       fragment.appendChild(rect)
 
-      // 角上画小方块,便于在框很小时也能看见
-      fragment.appendChild(handle(x, y, region.color))
-      fragment.appendChild(handle(x + width, y + height, region.color))
+      if (region.id === soleSelected) {
+        const right = x + width
+        const bottom = y + height
+        for (const id of HANDLE_IDS) {
+          const hx = id.includes('w') ? x : id.includes('e') ? right : (x + right) / 2
+          const hy = id.includes('n') ? y : id.includes('s') ? bottom : (y + bottom) / 2
+          fragment.appendChild(handle(hx, hy, region.color, HANDLE_SIZE))
+          handlePoints.push({ id, x: hx, y: hy })
+        }
+      } else {
+        // 角上画小方块,便于在框很小时也能看见
+        fragment.appendChild(handle(x, y, region.color, 5))
+        fragment.appendChild(handle(x + width, y + height, region.color, 5))
+      }
     }
     regionLayer.appendChild(fragment)
   }
@@ -258,8 +294,7 @@ export function useAnnotationSvg(
     return element
   }
 
-  function handle(cx: number, cy: number, color: string): SVGRectElement {
-    const size = 5
+  function handle(cx: number, cy: number, color: string, size: number): SVGRectElement {
     const element = document.createElementNS(SVG_NS, 'rect')
     element.setAttribute('x', String(cx - size / 2))
     element.setAttribute('y', String(cy - size / 2))
@@ -286,6 +321,8 @@ export function useAnnotationSvg(
     guideLayer?.replaceChildren()
     regionLayer?.replaceChildren()
     draftLayer?.replaceChildren()
+    // 图层空了,手柄也跟着没了 —— 不清的话命中检测还在按旧位置响应
+    handlePoints = []
   }
 
   function destroy() {
@@ -306,6 +343,24 @@ export function useAnnotationSvg(
     setRegions(next: Region[]) {
       regions = next
       draw()
+    },
+    setSelection(next: Set<string>) {
+      selection = next
+      draw()
+    },
+    setHandlesVisible(next: boolean) {
+      handlesVisible = next
+      draw()
+    },
+    /** 屏幕坐标(相对 viewer.element 左上角)下是哪个手柄。不在手柄上返回 null。 */
+    handleAt(x: number, y: number): HandleId | null {
+      const reach = HANDLE_SIZE / 2 + HANDLE_SLOP
+      for (const point of handlePoints) {
+        if (Math.abs(x - point.x) <= reach && Math.abs(y - point.y) <= reach) {
+          return point.id
+        }
+      }
+      return null
     },
     setGuides(next: Guide[]) {
       guides = next

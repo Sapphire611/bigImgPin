@@ -1,13 +1,21 @@
 <script setup lang="ts">
-import { computed, ref } from 'vue'
+import { computed, ref, type ComponentPublicInstance } from 'vue'
 
-import { formatCoord } from '../osd/coords'
-import type { Guide, Rect, Region } from '../types'
+import {
+  COORD_DECIMALS_MAX,
+  coordDecimals,
+  formatCoord,
+  roundRect,
+} from '../osd/coords'
+import type { ExportRect, Guide, Rect, Region } from '../types'
+
+/** 可选的坐标小数位数。0 在最前,因为它是默认值。 */
+const DECIMALS_CHOICES = Array.from({ length: COORD_DECIMALS_MAX + 1 }, (_, i) => i)
 
 const props = defineProps<{
   regions: Region[]
   guides: Guide[]
-  selectedId: string | null
+  selectedIds: Set<string>
   imageWidth: number
   imageHeight: number
   hasImage: boolean
@@ -15,13 +23,66 @@ const props = defineProps<{
 
 const emit = defineEmits<{
   add: [Rect]
-  remove: [string]
+  remove: [string[]]
   select: [string | null]
+  toggle: [string]
+  rename: [string, string]
   clearRegions: []
   removeGuide: [number]
   clearGuides: []
   focus: [Region]
+  exportCsv: [ExportRect[]]
+  exportCrops: [ExportRect[]]
 }>()
+
+/**
+ * 点一行。Ctrl / Cmd 是加减选,普通点是单选。
+ *
+ * 单选时再点一次已选中的行 = 取消选中:保留原来的手感,
+ * 也是「不想选了」最省事的办法。
+ */
+function onRowClick(region: Region, event: MouseEvent) {
+  if (event.ctrlKey || event.metaKey) {
+    emit('toggle', region.id)
+    return
+  }
+  if (props.selectedIds.size === 1 && props.selectedIds.has(region.id)) {
+    emit('select', null)
+    return
+  }
+  emit('select', region.id)
+}
+
+// ---------------------------------------------------------------- 改名
+
+/** 正在改名的框。null 表示没有在改名。 */
+const editingId = ref<string | null>(null)
+const editingName = ref('')
+
+function startEdit(region: Region) {
+  editingId.value = region.id
+  editingName.value = region.name ?? ''
+}
+
+function commitName() {
+  const id = editingId.value
+  // Esc 已经先把它收掉了 —— 那时紧随其后的 blur 不该再提交一次
+  if (!id) return
+  editingId.value = null
+  emit('rename', id, editingName.value)
+}
+
+function cancelEdit() {
+  // 先清 editingId,让随后的 blur 走到 commitName 时被挡下
+  editingId.value = null
+}
+
+/** 函数式 ref:输入框一出现就聚焦并全选,免得还要再点一下 */
+function focusInput(el: Element | ComponentPublicInstance | null) {
+  const input = el as HTMLInputElement | null
+  input?.focus()
+  input?.select()
+}
 
 /** `axis: 'x'` 是竖线(约束 x),`axis: 'y'` 是横线(约束 y)。 */
 function guideLabel(guide: Guide): string {
@@ -107,6 +168,48 @@ function addTransformed() {
   if (rect) emit('add', rect)
 }
 
+// ---------------------------------------------------------------- 导出
+
+const applyInverse = ref(false)
+
+/** k 为 0 时逆向变换无解(要除以它)。正向变换允许 k=0 —— 那只是把框压成一个点,不报错 */
+const canInvert = computed(() => k.value !== 0)
+
+/** 名字跟着框走,不参与坐标变换 —— 两种导出模式都要带上它 */
+function withName(rect: Rect, name?: string): ExportRect {
+  return name ? { ...rect, name } : rect
+}
+
+/** 图像坐标 → 源坐标系,和上面那条正向变换互逆。 */
+const inverseRects = computed<ExportRect[]>(() =>
+  props.regions.map((region) =>
+    withName(
+      roundRect({
+        x: region.x / k.value - dx.value,
+        y: region.y / k.value - dy.value,
+        w: region.w / k.value,
+        h: region.h / k.value,
+      }),
+      region.name,
+    ),
+  ),
+)
+
+/**
+ * 图像坐标原样导出。Region 上的 id、颜色对导出没有意义,不带过去。
+ *
+ * 这里再过一次 `roundRect`:它同时负责两件事 —— 按当前位数收敛(老框可能是
+ * 改设置之前存下的)、以及让导出值和屏幕上显示的值一致。
+ */
+const plainRects = computed<ExportRect[]>(() =>
+  props.regions.map(({ x, y, w, h, name }) => withName(roundRect({ x, y, w, h }), name)),
+)
+
+/** 坐标导出的内容,是否套用逆向变换由那个勾决定 */
+const exportRects = computed<ExportRect[]>(() =>
+  applyInverse.value && canInvert.value ? inverseRects.value : plainRects.value,
+)
+
 /** 把选中框的数值填回输入框,方便在此基础上改或缩放 */
 function loadFrom(region: Region) {
   // 用 formatCoord 而不是直接 String() —— 后者会把完整的浮点尾数倒进输入框
@@ -121,7 +224,20 @@ function loadFrom(region: Region) {
 <template>
   <div class="panel">
     <section>
-      <h3>坐标输入</h3>
+      <h3>
+        坐标输入
+        <!--
+          位数放在这一节而不是单独开一栏:它改的就是下面这四个格子和整张列表的读数,
+          离得越近越不需要解释。它同时也决定新框的坐标精度和导出 CSV 的位数 ——
+          三处必须一致,分开设就会出现「看见 1235、存着 1234.57」。
+        -->
+        <label class="decimals" title="坐标保留几位小数。0 = 只按整数,新画的框会吸附到整数">
+          小数位
+          <select v-model.number="coordDecimals">
+            <option v-for="n in DECIMALS_CHOICES" :key="n" :value="n">{{ n }}</option>
+          </select>
+        </label>
+      </h3>
       <div class="grid">
         <label>x<input v-model="x" type="number" placeholder="0" /></label>
         <label>y<input v-model="y" type="number" placeholder="0" /></label>
@@ -177,12 +293,27 @@ function loadFrom(region: Region) {
         <li
           v-for="(region, index) in regions"
           :key="region.id"
-          :class="{ selected: region.id === selectedId }"
-          @click="emit('select', region.id === selectedId ? null : region.id)"
+          :class="{ selected: selectedIds.has(region.id) }"
+          :title="editingId === region.id ? undefined : '双击改名'"
+          @click="onRowClick(region, $event)"
+          @dblclick="startEdit(region)"
         >
           <span class="dot" :style="{ background: region.color }" />
           <span class="idx">{{ index + 1 }}</span>
-          <span class="text mono">
+
+          <input
+            v-if="editingId === region.id"
+            :ref="focusInput"
+            v-model="editingName"
+            class="name-input"
+            placeholder="给这个框起个名字"
+            @click.stop
+            @keydown.enter="commitName"
+            @keydown.esc="cancelEdit"
+            @blur="commitName"
+          />
+          <span v-else class="text mono">
+            <span v-if="region.name" class="name">{{ region.name }}</span>
             <span class="pos">
               x {{ formatCoord(region.x) }} · y {{ formatCoord(region.y) }}
             </span>
@@ -190,13 +321,24 @@ function loadFrom(region: Region) {
               w {{ formatCoord(region.w) }} × h {{ formatCoord(region.h) }}
             </span>
           </span>
+
           <span class="actions">
             <button class="mini" title="跳转到该框" @click.stop="emit('focus', region)">定位</button>
             <button class="mini" title="填入输入框" @click.stop="loadFrom(region)">填入</button>
-            <button class="mini danger" title="删除" @click.stop="emit('remove', region.id)">×</button>
+            <button class="mini danger" title="删除" @click.stop="emit('remove', [region.id])">×</button>
           </span>
         </li>
       </ul>
+
+      <p v-if="regions.length > 1" class="hint">Ctrl 点击可多选,Delete 删除选中的</p>
+
+      <button
+        v-if="selectedIds.size > 1"
+        class="wide"
+        @click="emit('remove', [...selectedIds])"
+      >
+        删除选中的 {{ selectedIds.size }} 个框
+      </button>
 
       <!-- 不做二次确认:撤销更顺手,而确认框点多了就变成闭眼按「确定」 -->
       <button
@@ -207,6 +349,45 @@ function loadFrom(region: Region) {
       >
         清空全部框
       </button>
+    </section>
+
+    <!--
+      放在框列表之后、辅助线之前。辅助线那一节基本是回看用的列表,
+      而这两个按钮得让人找得到 —— 面板整体比窗口高,越靠下越容易被折在视野外。
+    -->
+    <section>
+      <h3>导出</h3>
+
+      <!--
+        逆向变换的开关放在这里而不是导出弹窗里:用户要看着上面的「偏移 / 系数 k」
+        才决定要不要套 —— 那是同一个决策的两半,拆到两个地方就得来回切。
+      -->
+      <label class="check" :class="{ dimmed: !canInvert }">
+        <input v-model="applyInverse" type="checkbox" :disabled="!canInvert" />
+        套用逆向变换(导出到源坐标系)
+      </label>
+
+      <p class="formula">
+        x = x图 / k − 偏移x<br />
+        y = y图 / k − 偏移y<br />
+        w = w图 / k
+      </p>
+
+      <p v-if="!canInvert" class="hint warn-text">系数 k 为 0,逆向变换无解</p>
+
+      <button class="wide" :disabled="regions.length === 0" @click="emit('exportCsv', exportRects)">
+        导出坐标 CSV({{ regions.length }} 个框)
+      </button>
+      <button
+        class="wide"
+        :disabled="regions.length === 0"
+        title="按序号 + 坐标命名,存到自选目录"
+        @click="emit('exportCrops', plainRects)"
+      >
+        导出框内图像…
+      </button>
+
+      <p class="hint">裁剪按图像坐标取,不受上面那个勾影响。</p>
     </section>
 
     <section>
@@ -238,6 +419,7 @@ function loadFrom(region: Region) {
         <button class="wide danger" @click="emit('clearGuides')">清空辅助线</button>
       </template>
     </section>
+
   </div>
 </template>
 
@@ -312,12 +494,52 @@ input {
   font-size: 12px;
 }
 
+/* 推到这一行最右边。它是个设置项而不是读数,所以不用 --text-dim 那个标题色 */
+.decimals {
+  margin-left: auto;
+  gap: 4px;
+  font-weight: 400;
+  color: var(--text-faint);
+}
+
+.decimals select {
+  padding: 1px 2px;
+  border-radius: var(--r-sm);
+  border: 1px solid var(--border-strong);
+  background: var(--stage);
+  color: var(--text);
+  font-family: var(--font-mono);
+  font-size: 11px;
+}
+
 .factor {
   justify-content: space-between;
 }
 
 .factor input {
   width: 92px;
+}
+
+.check {
+  gap: 8px;
+  line-height: 1.4;
+  color: var(--text-dim);
+  cursor: pointer;
+}
+
+/* 复选框是唯一一个不靠凹槽/描边说明边界的控件,不能被上面那条
+   `input { width: 100% }` 撑满整行 */
+.check input {
+  width: auto;
+  flex-shrink: 0;
+  margin: 0;
+  /* chrome 里没有彩色强调色,勾选框也用前景色 */
+  accent-color: var(--text);
+}
+
+.check.dimmed {
+  color: var(--text-faint);
+  cursor: default;
 }
 
 .wide {
@@ -459,6 +681,23 @@ button.mini.danger:hover:not(:disabled) {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+/* 名字用界面字体,坐标用等宽 —— 一边是人写的字,一边是读数。
+   整行都是等宽的话,扫一眼分不出哪个是名字哪个是数值。 */
+.name {
+  font-family: var(--font-ui);
+  color: var(--text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* 改名时输入框顶掉整个坐标区,所以要和 .text 一样把剩下的宽度吃满 */
+.name-input {
+  flex: 1;
+  min-width: 0;
+  padding: 3px 6px;
 }
 
 .actions {

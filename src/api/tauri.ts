@@ -4,6 +4,9 @@ import { listen, type UnlistenFn } from '@tauri-apps/api/event'
 import { check } from '@tauri-apps/plugin-updater'
 
 import type {
+  CropOutcome,
+  CropProgress,
+  ExportRect,
   Guide,
   LoadedAnnotations,
   PreparedImage,
@@ -65,6 +68,33 @@ export function saveAnnotations(
   guides: Guide[],
 ): Promise<SaveOutcome> {
   return invoke<SaveOutcome>('save_annotations', { path, width, height, regions, guides })
+}
+
+// ---------------------------------------------------------------- 导出
+
+/**
+ * 导出框坐标 CSV。返回实际写入的路径;用户取消对话框则返回 null。
+ *
+ * `decimals` 只影响**打印几位** —— 数值是前端按同一精度收敛好才送过来的,
+ * 所以两边的舍入规则不会打架。
+ */
+export function exportRegionsCsv(
+  source: string,
+  rects: ExportRect[],
+  decimals: number,
+): Promise<string | null> {
+  return invoke<string | null>('export_regions_csv', { source, rects, decimals })
+}
+
+/** 裁剪每个框里的图像到一个目录。返回 null 表示用户取消了选目录。 */
+export function exportCrops(source: string, rects: ExportRect[]): Promise<CropOutcome | null> {
+  return invoke<CropOutcome | null>('export_crops', { source, rects })
+}
+
+export function onCropProgress(
+  handler: (progress: CropProgress) => void,
+): Promise<UnlistenFn> {
+  return listen<CropProgress>('crop-progress', (event) => handler(event.payload))
 }
 
 export function onTileProgress(

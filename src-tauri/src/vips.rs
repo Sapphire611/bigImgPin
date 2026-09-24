@@ -107,6 +107,9 @@ pub struct ImageMeta {
     pub width: u32,
     pub height: u32,
     pub bands: u32,
+    /// 波段格式,vips 的命名(uchar / ushort / float / int …)。
+    /// 裁剪导出靠它选输出容器 —— 见 `crop_extension`。
+    pub format: String,
 }
 
 /// 只读文件头拿尺寸 —— **不解码图像**,几十毫秒返回。
@@ -132,17 +135,71 @@ pub fn probe_image(vips: &Path, input: &Path) -> Result<ImageMeta, String> {
     }
 
     let text = String::from_utf8_lossy(&out.stdout);
-    let field = |key: &str| -> Option<u32> {
+    // 按 `key: value` 取字段。`-a` 的第一行是 `<路径>: 200x100 ushort, 3 bands…`,
+    // 路径里完全可能含 "width" 之类的字样,所以要求行**以** key 开头,不能只是包含。
+    let field = |key: &str| -> Option<String> {
         text.lines()
             .find_map(|line| line.strip_prefix(key)?.strip_prefix(':'))
-            .and_then(|v| v.trim().parse().ok())
+            .map(|v| v.trim().to_string())
     };
 
     Ok(ImageMeta {
-        width: field("width").ok_or_else(|| format!("无法解析 width:\n{text}"))?,
-        height: field("height").ok_or_else(|| format!("无法解析 height:\n{text}"))?,
-        bands: field("bands").unwrap_or(3),
+        width: field("width")
+            .and_then(|v| v.parse().ok())
+            .ok_or_else(|| format!("无法解析 width:\n{text}"))?,
+        height: field("height")
+            .and_then(|v| v.parse().ok())
+            .ok_or_else(|| format!("无法解析 height:\n{text}"))?,
+        bands: field("bands").and_then(|v| v.parse().ok()).unwrap_or(3),
+        format: field("format").unwrap_or_else(|| "uchar".into()),
     })
+}
+
+/// 裁剪导出用哪种容器。
+///
+/// 实测(vips 8.18.6):uchar → 8 位 PNG,ushort → 16 位 PNG(位深保留),
+/// 而 **float → 8 位 PNG,静默丢精度**。所以浮点/整数类源图改用 TIFF,
+/// 那个容器存得下任意格式。
+///
+/// 静默压位深比报错更危险:导出的裁剪图看着好好的,数值已经被截断了。
+pub fn crop_extension(format: &str) -> &'static str {
+    match format {
+        "uchar" | "ushort" => "png",
+        _ => "tif",
+    }
+}
+
+/// 裁一块矩形区域另存。
+///
+/// `extract_area` 对金字塔 TIFF 是真随机访问,很快。代价是它对**条带式**压缩的源图
+/// (非金字塔 TIFF、大 JPEG/PNG)会退化成从头解码 —— 取靠右下角的区域可能很慢。
+/// 没有为此做「从缓存瓦片拼接」,那条路要自己解码、对齐、缝合,不值得。
+pub fn crop_image(
+    vips: &Path,
+    input: &Path,
+    output: &Path,
+    left: u32,
+    top: u32,
+    width: u32,
+    height: u32,
+) -> Result<(), String> {
+    let out = vips_command(vips)
+        .arg("extract_area")
+        .arg(input)
+        .arg(output)
+        .arg(left.to_string())
+        .arg(top.to_string())
+        .arg(width.to_string())
+        .arg(height.to_string())
+        .output()
+        .map_err(|e| format!("启动 vips extract_area 失败: {e}"))?;
+
+    if !out.status.success() {
+        // 实测越界时是 `extract_area: bad extract area`,不会产出文件。
+        // 调用方应当先把区域夹到图内 —— 走到这里说明夹取有问题。
+        return Err(String::from_utf8_lossy(&out.stderr).trim().to_string());
+    }
+    Ok(())
 }
 
 /// 校验这个 vips 构建是否带 dzsave。
@@ -356,6 +413,128 @@ mod tests {
             parse_percent("vips temp-3: 6000 x 6000 pixels, 4 threads, 6000 x 16 tiles"),
             None
         );
+    }
+
+    // 下面两条要跑真的 vips 二进制 —— 这是本项目里唯一依赖外部程序的地方。
+    // 找不到就**跳过**而不是失败:开发机上没装 vips 不该让人以为代码坏了。
+
+    fn find_vips() -> Option<PathBuf> {
+        let bundled = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("resources")
+            .join("vips-win64")
+            .join("bin")
+            .join("vips.exe");
+        if bundled.is_file() {
+            return Some(bundled);
+        }
+        which(if cfg!(windows) { "vips.exe" } else { "vips" })
+    }
+
+    /// 造一张「每个像素的值就是它自己的坐标」的图。
+    ///
+    /// 除了它,没法验证裁剪取到的是**哪一块** —— 参数顺序写错(left/top 和
+    /// width/height 调个个)时尺寸照样对,只有读像素值才抓得住。
+    fn setup_ramp(tag: &str) -> Option<(PathBuf, PathBuf, PathBuf)> {
+        // 测试是并行跑的,同一个进程 pid 相同,所以目录名必须带上用例名
+        let dir = std::env::temp_dir().join(format!("bigimgpin-vips-{tag}-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+
+        let vips = find_vips()?;
+        let ramp = dir.join("ramp.tif");
+        let status = vips_command(&vips)
+            .arg("xyz")
+            .arg(&ramp)
+            .args(["200", "100", "--csize", "3"])
+            .output()
+            .ok()?;
+        assert!(status.status.success(), "造测试图失败");
+
+        Some((vips, dir, ramp))
+    }
+
+    fn getpoint(vips: &Path, image: &Path, x: u32, y: u32) -> String {
+        // 刻意**不走** vips_command:它会给每个调用加上 VIPS_PROGRESS=1,
+        // 进度信息混进 stdout,而这里要读的正是 stdout 上的像素值。
+        let mut cmd = Command::new(vips);
+        hide_console(&mut cmd);
+        let out = cmd
+            .arg("getpoint")
+            .arg(image)
+            .args([x.to_string(), y.to_string()])
+            .output()
+            .expect("执行 vips getpoint 失败");
+        String::from_utf8_lossy(&out.stdout).trim().to_string()
+    }
+
+    #[test]
+    fn crop_image_extracts_the_requested_region() {
+        let Some((vips, dir, ramp)) = setup_ramp("region") else {
+            eprintln!("跳过:没找到 vips 二进制");
+            return;
+        };
+        let out = dir.join("crop.tif");
+
+        crop_image(&vips, &ramp, &out, 10, 20, 50, 40).unwrap();
+
+        // 裁出来的 (0,0) 应当是原图的 (10,20)
+        assert!(
+            getpoint(&vips, &out, 0, 0).starts_with("10 20"),
+            "裁剪起点错了:{}",
+            getpoint(&vips, &out, 0, 0)
+        );
+        // 右下角:10+49, 20+39
+        assert!(
+            getpoint(&vips, &out, 49, 39).starts_with("59 59"),
+            "裁剪终点错了:{}",
+            getpoint(&vips, &out, 49, 39)
+        );
+
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn crop_image_rejects_out_of_bounds() {
+        let Some((vips, dir, ramp)) = setup_ramp("oob") else {
+            eprintln!("跳过:没找到 vips 二进制");
+            return;
+        };
+        let out = dir.join("oob.tif");
+
+        // 实测 vips 报 `bad extract area` 并以非零码退出,不产出文件。
+        // 调用方(export::normalize)负责在此之前夹取到图内。
+        assert!(crop_image(&vips, &ramp, &out, 180, 90, 50, 40).is_err());
+
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn crop_container_follows_bit_depth() {
+        // 8 / 16 位留给 PNG(哪都能打开),其余走 TIFF 保住精度
+        assert_eq!(crop_extension("uchar"), "png");
+        assert_eq!(crop_extension("ushort"), "png");
+        // float 最关键:实测 vips 会把它**静默**压成 8 位 PNG
+        assert_eq!(crop_extension("float"), "tif");
+        assert_eq!(crop_extension("int"), "tif");
+        assert_eq!(crop_extension("double"), "tif");
+    }
+
+    #[test]
+    fn parses_header_fields_by_exact_key_prefix() {
+        // 真实输出形态:第一行是 `<路径>: 200x100 ushort, 3 bands, rgb16, tiffload`
+        let text = "C:/imgs/width_probe.tif: 200x100 ushort, 3 bands, rgb16, tiffload\n\
+                    width: 200\n\
+                    height: 100\n\
+                    bands: 3\n\
+                    format: ushort\n";
+        let field = |key: &str| -> Option<String> {
+            text.lines()
+                .find_map(|line| line.strip_prefix(key)?.strip_prefix(':'))
+                .map(|v| v.trim().to_string())
+        };
+
+        // 路径里带 width 也不能被当成字段行 —— 第一行不以 "width" 开头
+        assert_eq!(field("width").as_deref(), Some("200"));
+        assert_eq!(field("format").as_deref(), Some("ushort"));
     }
 
     #[test]

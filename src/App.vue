@@ -7,15 +7,21 @@ import StatusBar from './components/StatusBar.vue'
 import ToolBar from './components/ToolBar.vue'
 import {
   clampRect,
+  coordDecimals,
+  HANDLE_CURSORS,
   imageToViewportRect,
   oneToOneZoom,
+  resizeRect,
+  roundCoord,
   screenToImage,
+  type HandleId,
   zoomRatio as calcZoomRatio,
 } from './osd/coords'
 import { useAnnotationSvg } from './osd/useAnnotationSvg'
 import { useViewer } from './osd/useViewer'
 import { useAnnotations } from './state/useAnnotations'
 import type {
+  ExportRect,
   LoadedAnnotations,
   PreparedImage,
   Rect,
@@ -36,11 +42,20 @@ const gridStep = ref(1000)
 
 // 框、辅助线、选中项和撤销栈都归它管。App 只负责把用户操作翻译成它的调用。
 const annotations = useAnnotations()
-const { regions, guides, selectedId, canUndo, canRedo, revision } = annotations
+const { regions, guides, selectedIds, selectedId, canUndo, canRedo, revision } = annotations
 
 /** 标注实际写到哪个文件了,以及需要告诉用户的异常 */
 const annotationFile = ref<string | null>(null)
 const annotationWarning = ref<string | null>(null)
+
+/**
+ * 一次性操作的结果(导出完成之类)。
+ * 和 annotationWarning 分开:那条是标注文件的状态,得一直挂着直到用户处理,
+ * 不能被一次成功的导出顺手清掉。
+ */
+const notice = ref<string | null>(null)
+/** 裁剪导出的进度。null 表示没有在导出。 */
+const cropping = ref<{ done: number; total: number } | null>(null)
 
 const vipsStatus = ref<VipsStatus | null>(null)
 const errorMessage = ref<string | null>(null)
@@ -54,8 +69,17 @@ const overlay = useAnnotationSvg(() => viewerApi.viewer.value, () => stageEl.val
 // 而拖拽路径上的漏调只在特定操作顺序下才暴露,很难查。
 watch(regions, (value) => overlay.setRegions(value))
 watch(guides, (value) => overlay.setGuides(value))
+watch(selectedIds, (value) => overlay.setSelection(value))
+// 拖动模式下不画手柄:那时候拖拽是平移画面,画着几个拖不动的方块是在骗人
+watch(mode, (value) => overlay.setHandlesVisible(value === 'draw'))
 
 const hasImage = computed(() => image.value !== null)
+
+const cropPercent = computed(() => {
+  const task = cropping.value
+  if (!task || task.total === 0) return '0%'
+  return `${Math.round((task.done / task.total) * 100)}%`
+})
 
 // ---------------------------------------------------------------- 生命周期
 
@@ -130,6 +154,12 @@ onMounted(async () => {
     }),
   )
 
+  cleanups.push(
+    await api.onCropProgress((progress) => {
+      cropping.value = { done: progress.done, total: progress.total }
+    }),
+  )
+
   // 主动查一次,不依赖事件 —— 事件可能在监听器注册之前就已经发过了
   try {
     // 成功即代表可用:命令的 Err 分支才是「找不到 vips」
@@ -146,18 +176,60 @@ onBeforeUnmount(() => {
 
 // ---------------------------------------------------------------- 交互
 
-/** 正在拖拽的状态。null 表示没有拖拽。 */
+/** 拖拽开始前某个框的坐标。位移一律相对它算,不做累加 —— 累加会攒出漂移。 */
+interface DragOrigin {
+  id: string
+  rect: Rect
+}
+
+/**
+ * 正在拖拽的状态。null 表示没有拖拽。
+ *
+ * move 和 resize 都带 `origins`:移动可能是拖动一整批选中的框,
+ * 缩放恒为一项(手柄只有单选时才出现)。共用一个字段是为了让松手时的
+ * 「到底动没动」判断只有一处。
+ */
 type DragState =
   | { kind: 'draw'; startX: number; startY: number }
-  | { kind: 'move'; id: string; grabX: number; grabY: number; origin: Rect }
+  | { kind: 'move'; grabX: number; grabY: number; origins: DragOrigin[] }
+  | { kind: 'resize'; handle: HandleId; grabX: number; grabY: number; origins: DragOrigin[] }
 
 let drag: DragState | null = null
 
-function pointerToImage(event: PointerEvent): { x: number; y: number } | null {
+/** 记下这些框当前的坐标。 */
+function originsOf(ids: string[]): DragOrigin[] {
+  return ids.flatMap((id) => {
+    const region = regions.value.find((r) => r.id === id)
+    return region ? [{ id, rect: { x: region.x, y: region.y, w: region.w, h: region.h } }] : []
+  })
+}
+
+/** 事件 → 相对 viewer.element 左上角的屏幕像素。 */
+function pointerToScreen(event: PointerEvent): { x: number; y: number } | null {
   const viewer = viewerApi.viewer.value
   if (!viewer) return null
   const bounds = viewer.element.getBoundingClientRect()
-  return screenToImage(viewer, event.clientX - bounds.left, event.clientY - bounds.top)
+  return { x: event.clientX - bounds.left, y: event.clientY - bounds.top }
+}
+
+function pointerToImage(event: PointerEvent): { x: number; y: number } | null {
+  const viewer = viewerApi.viewer.value
+  const screen = pointerToScreen(event)
+  if (!viewer || !screen) return null
+  return screenToImage(viewer, screen.x, screen.y)
+}
+
+/**
+ * 手柄的指针形状。悬停时给个提示,否则用户不知道框边上那几个方块能拖。
+ *
+ * 只在自己这一层设内联样式,清的时候写回空串让 OSD 的样式表接管 ——
+ * 记着 OSD 原来是什么再写回去,迟早会跟它的内部实现脱节。
+ */
+function syncHandleCursor(handle: HandleId | null) {
+  const element = viewerApi.viewer.value?.element
+  if (!element) return
+  const next = handle ? HANDLE_CURSORS[handle] : ''
+  if (element.style.cursor !== next) element.style.cursor = next
 }
 
 /** 命中检测:从后往前找,让后画的框优先被选中。 */
@@ -174,21 +246,50 @@ function findRegionAt(x: number, y: number): Region | null {
 function onPointerDown(event: PointerEvent) {
   if (mode.value !== 'draw' || !image.value || event.button !== 0) return
 
+  const screen = pointerToScreen(event)
   const point = pointerToImage(event)
-  if (!point) return
+  if (!screen || !point) return
+
+  // 手柄必须先判:它就压在选中框的边框上,和「点中这个框」是重叠的。
+  // 反过来先判框的话,选中的框永远拖不到自己的手柄。
+  const sole = selectedId.value
+  if (sole) {
+    const handle = overlay.handleAt(screen.x, screen.y)
+    const region = regions.value.find((r) => r.id === sole)
+    if (handle && region) {
+      drag = {
+        kind: 'resize',
+        handle,
+        grabX: point.x,
+        grabY: point.y,
+        origins: originsOf([sole]),
+      }
+      ;(event.target as Element).setPointerCapture?.(event.pointerId)
+      event.preventDefault()
+      return
+    }
+  }
 
   const hit = findRegionAt(point.x, point.y)
   if (hit) {
-    selectedId.value = hit.id
-    drag = {
-      kind: 'move',
-      id: hit.id,
-      grabX: point.x,
-      grabY: point.y,
-      origin: { x: hit.x, y: hit.y, w: hit.w, h: hit.h },
+    if (event.ctrlKey || event.metaKey) {
+      annotations.toggleSelected(hit.id)
+    } else if (!selectedIds.value.has(hit.id)) {
+      // 已经在选区里的框不重置选区 —— 那样就拖不动一整批了
+      annotations.select(hit.id)
+    }
+
+    // 刚被 Ctrl 点掉的框不该跟着一起拖
+    if (selectedIds.value.has(hit.id)) {
+      drag = {
+        kind: 'move',
+        grabX: point.x,
+        grabY: point.y,
+        origins: originsOf([...selectedIds.value]),
+      }
     }
   } else {
-    selectedId.value = null
+    annotations.select(null)
     drag = { kind: 'draw', startX: point.x, startY: point.y }
     overlay.setDraft({ x: point.x, y: point.y, w: 0, h: 0 })
   }
@@ -199,8 +300,15 @@ function onPointerDown(event: PointerEvent) {
 }
 
 function onPointerMove(event: PointerEvent) {
+  const screen = pointerToScreen(event)
   const point = pointerToImage(event)
   cursor.value = point
+
+  // 悬停手柄时给个能拖的提示。拖拽中不改 —— 那时形状该定在手柄上
+  if (!drag && mode.value === 'draw' && screen && selectedId.value) {
+    syncHandleCursor(overlay.handleAt(screen.x, screen.y))
+  }
+
   if (!point || !drag || !image.value) return
 
   if (drag.kind === 'draw') {
@@ -211,16 +319,21 @@ function onPointerMove(event: PointerEvent) {
         image.value.height,
       ),
     )
+    return
+  }
+
+  const dx = point.x - drag.grabX
+  const dy = point.y - drag.grabY
+  // 拖拽过程中不记还原点 —— 一次拖拽在撤销栈里应该是「一步」,不是几十步
+  if (drag.kind === 'move') {
+    annotations.setRegionsRects(
+      drag.origins.map(({ id, rect }) => ({ id, rect: { x: rect.x + dx, y: rect.y + dy, w: rect.w, h: rect.h } })),
+    )
   } else {
-    const dx = point.x - drag.grabX
-    const dy = point.y - drag.grabY
-    // 拖拽过程中不记还原点 —— 一次拖拽在撤销栈里应该是「一步」,不是几十步
-    annotations.setRegionRect(drag.id, {
-      x: drag.origin.x + dx,
-      y: drag.origin.y + dy,
-      w: drag.origin.w,
-      h: drag.origin.h,
-    })
+    const base = drag.origins[0]
+    annotations.setRegionsRects([
+      { id: base.id, rect: resizeRect(base.rect, drag.handle, dx, dy) },
+    ])
   }
 }
 
@@ -244,11 +357,17 @@ function onPointerUp(event: PointerEvent) {
   } else {
     // 只是点了一下、没有真的挪动,就不留还原点。
     // 否则连着点几下框,撤销栈里会堆一串「什么都没变」的空步。
-    const { id, origin } = drag
-    const current = regions.value.find((r) => r.id === id)
-    if (current && (current.x !== origin.x || current.y !== origin.y)) {
-      annotations.commit()
-    }
+    const moved = drag.origins.some(({ id, rect }) => {
+      const current = regions.value.find((r) => r.id === id)
+      if (!current) return false
+      return (
+        current.x !== rect.x ||
+        current.y !== rect.y ||
+        current.w !== rect.w ||
+        current.h !== rect.h
+      )
+    })
+    if (moved) annotations.commit()
   }
 
   drag = null
@@ -261,6 +380,7 @@ function onPointerCancel() {
 
 function onPointerLeave() {
   cursor.value = null
+  syncHandleCursor(null)
 }
 
 /**
@@ -278,7 +398,10 @@ function onDoubleClick(event: MouseEvent) {
   if (!point) return
 
   const axis = event.shiftKey ? 'x' : 'y'
-  annotations.addGuide({ axis, pos: axis === 'x' ? point.x : point.y, color: '#ffd666' })
+  // 和框一样按当前位数收敛:辅助线的标签显示的就是这个值,
+  // 存一个 1234.57 却显示成 1235,读数就没法当准了
+  const raw = axis === 'x' ? point.x : point.y
+  annotations.addGuide({ axis, pos: roundCoord(raw), color: '#ffd666' })
   event.preventDefault()
 }
 
@@ -318,8 +441,8 @@ function onKeyDown(event: KeyboardEvent) {
   if (!image.value) return
 
   if (event.key === 'Delete' || event.key === 'Backspace') {
-    if (selectedId.value) {
-      annotations.removeRegion(selectedId.value)
+    if (selectedIds.value.size > 0) {
+      annotations.removeRegions([...selectedIds.value])
       event.preventDefault()
     }
     return
@@ -329,7 +452,7 @@ function onKeyDown(event: KeyboardEvent) {
     // 先收掉可能正在进行的拖拽,再取消选中
     overlay.setDraft(null)
     drag = null
-    selectedId.value = null
+    annotations.clearSelection()
     return
   }
 
@@ -458,6 +581,48 @@ watch(revision, () => {
   void flushAnnotations()
 })
 
+// ---------------------------------------------------------------- 导出
+
+/** 问题列表可能很长(几十个框越界),横幅里只列前几条 */
+function summarize(problems: string[], limit = 3): string {
+  const head = problems.slice(0, limit).join(";")
+  return problems.length > limit ? `${head} 等 ${problems.length} 个` : head
+}
+
+async function exportCsv(rects: ExportRect[]) {
+  const current = image.value
+  if (!current) return
+  try {
+    const target = await api.exportRegionsCsv(current.sourcePath, rects, coordDecimals.value)
+    // 用户取消对话框时是 null —— 那不是失败,什么都不用说
+    if (target) notice.value = `已导出 ${rects.length} 个框到 ${target}`
+  } catch (error) {
+    errorMessage.value = String(error)
+  }
+}
+
+async function exportCrops(rects: ExportRect[]) {
+  const current = image.value
+  if (!current) return
+
+  cropping.value = { done: 0, total: rects.length }
+  try {
+    const outcome = await api.exportCrops(current.sourcePath, rects)
+    if (!outcome) return
+
+    // 部分成功是常态(总有框压在图像边界上),所以不写「导出完成」了事 ——
+    // 那会让人以为每个框都出来了
+    notice.value = outcome.problems.length
+      ? `已导出 ${outcome.written} 张裁剪图到 ${outcome.dir};` +
+        `${outcome.problems.length} 个框有问题:${summarize(outcome.problems)}`
+      : `已导出 ${outcome.written} 张裁剪图到 ${outcome.dir}`
+  } catch (error) {
+    errorMessage.value = String(error)
+  } finally {
+    cropping.value = null
+  }
+}
+
 /** 把视图移到指定框。框比视口大就缩放到装得下,否则只平移不改缩放。 */
 function focusRegion(region: Region) {
   const viewer = viewerApi.viewer.value
@@ -511,6 +676,7 @@ function setMode(next: ToolMode) {
   if (next === 'pan') {
     overlay.setDraft(null)
     drag = null
+    syncHandleCursor(null)
   }
 }
 
@@ -571,7 +737,7 @@ function onGridToggle(enabled: boolean) {
           </template>
         </div>
 
-        <div v-if="slicing" class="slicing">
+        <div v-if="slicing" class="busy">
           <h3>正在生成瓦片金字塔</h3>
           <div class="bar"><div class="fill" :style="{ width: `${slicing.percent}%` }" /></div>
           <p class="dim mono">
@@ -582,6 +748,14 @@ function onGridToggle(enabled: boolean) {
           </p>
           <p class="dim">超大图首次切片需要几分钟,期间界面可以正常操作。</p>
           <button class="danger" @click="api.cancelSlicing()">取消</button>
+        </div>
+
+        <!-- 裁剪没法取消:每个框是一次独立的 vips 调用,杀进程解决不了「已经写了一半」的问题 -->
+        <div v-else-if="cropping" class="busy">
+          <h3>正在导出框内图像</h3>
+          <div class="bar"><div class="fill" :style="{ width: cropPercent }" /></div>
+          <p class="dim mono">{{ cropping.done }} / {{ cropping.total }}</p>
+          <p class="dim">每个框单独读一次源图,大图可能要等一会儿。</p>
         </div>
 
         <!--
@@ -599,6 +773,11 @@ function onGridToggle(enabled: boolean) {
             <button @click="annotationWarning = null">知道了</button>
           </div>
 
+          <div v-if="notice" class="notice">
+            <span>{{ notice }}</span>
+            <button @click="notice = null">知道了</button>
+          </div>
+
           <div v-if="errorMessage" class="error">
             <span>{{ errorMessage }}</span>
             <button @click="errorMessage = null">关闭</button>
@@ -609,17 +788,21 @@ function onGridToggle(enabled: boolean) {
       <RectPanel
         :regions="regions"
         :guides="guides"
-        :selected-id="selectedId"
+        :selected-ids="selectedIds"
         :image-width="image?.width ?? 0"
         :image-height="image?.height ?? 0"
         :has-image="hasImage"
         @add="annotations.addRegion"
-        @remove="annotations.removeRegion"
-        @select="selectedId = $event"
+        @remove="annotations.removeRegions"
+        @select="annotations.select"
+        @toggle="annotations.toggleSelected"
+        @rename="annotations.renameRegion"
         @clear-regions="annotations.clearRegions"
         @remove-guide="annotations.removeGuide"
         @clear-guides="annotations.clearGuides"
         @focus="focusRegion"
+        @export-csv="exportCsv"
+        @export-crops="exportCrops"
       />
     </div>
 
@@ -711,7 +894,8 @@ function onGridToggle(enabled: boolean) {
   white-space: pre-wrap;
 }
 
-.slicing {
+/* 切片和裁剪导出共用:两者都是「一个跑一会儿的后台任务」,长得一样才能一眼认出 */
+.busy {
   position: absolute;
   top: 50%;
   left: 50%;
@@ -725,7 +909,7 @@ function onGridToggle(enabled: boolean) {
   box-shadow: var(--shadow);
 }
 
-.slicing h3 {
+.busy h3 {
   margin: 0 0 14px;
   font-size: 14px;
   font-weight: 500;
@@ -746,7 +930,7 @@ function onGridToggle(enabled: boolean) {
   transition: width 0.25s ease-out;
 }
 
-.slicing p {
+.busy p {
   margin: 4px 0;
 }
 

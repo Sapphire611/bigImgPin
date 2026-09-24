@@ -15,6 +15,7 @@
  *    `imageToViewportZoom(1)` 才是真正的 1:1。
  */
 import OpenSeadragon from 'openseadragon'
+import { ref, watch } from 'vue'
 
 import type { Rect } from '../types'
 
@@ -146,33 +147,123 @@ export function clampRect(rect: Rect, imageWidth: number, imageHeight: number): 
 }
 
 /**
- * 像素坐标的精度上限:**2 位小数**。
+ * 坐标的小数位数。**默认 0,也就是整数**。
  *
- * 框的坐标是连续量 —— 从屏幕坐标反算回来时会带一长串浮点噪声
- * (比如 123.45678901234567)。这些位数既读不出来也没有意义,还会让
- * 「填入输入框」这种操作把一大堆垃圾数字倒进表单。统一收敛到 2 位。
+ * 目标图是版图、显微这类整数坐标系里的东西:拖动时反算出来的 1234.57 只是
+ * 屏幕坐标的副产品,既读不出来也没有意义,却会一路带进列表、输入框和导出表格。
  *
- * 用 `toFixed` 而不是 `Math.round(v * 100) / 100`:后者会引入二进制浮点误差,
- * 比如 1.005 会变成 1.00。
+ * 这个值**同时管三件事**:显示、新框的坐标收敛、导出 CSV 的位数。
+ * 拆开管就会出现「屏幕上写 1235、文件里存 1234.57、导出来又是 1234.57」——
+ * 三处对不上,人就没法信任何一处。
+ *
+ * 存 localStorage 而不是走 Rust:标注文件里存的是**已经收敛过的**值,
+ * 这个设置本身不影响任何落盘数据,纯粹是界面偏好,和主题一个性质。
+ * 改小位数不会回头改动已有的框(谁被拖过谁就吸附过来)。
  */
-export function round2(value: number): number {
-  return Number(value.toFixed(2))
+const DECIMALS_KEY = 'bigimgpin.coordDecimals'
+
+/** 上限。再多对像素坐标没有意义 —— 屏幕上根本读不出来。 */
+export const COORD_DECIMALS_MAX = 3
+
+function readDecimals(): number {
+  const saved = Number.parseInt(localStorage.getItem(DECIMALS_KEY) ?? '', 10)
+  const valid = Number.isInteger(saved) && saved >= 0 && saved <= COORD_DECIMALS_MAX
+  return valid ? saved : 0
 }
 
-/** 把一个矩形收敛到 2 位小数。所有框在进入列表前都要过这一关。 */
+export const coordDecimals = ref(readDecimals())
+
+// 谁改都自动落盘,不必让每个写入点自己记得存一次
+watch(coordDecimals, (value) => localStorage.setItem(DECIMALS_KEY, String(value)))
+
+/**
+ * 按当前精度收敛一个坐标值。
+ *
+ * 用 `toFixed` 而不是 `Math.round(v * 10^n) / 10^n`:后者会引入二进制浮点误差,
+ * 比如 1.005 会变成 1.00。
+ */
+export function roundCoord(value: number): number {
+  return Number(value.toFixed(coordDecimals.value))
+}
+
+/** 把一个矩形按当前精度收敛。所有框在进入列表前都要过这一关。 */
 export function roundRect(rect: Rect): Rect {
   return {
-    x: round2(rect.x),
-    y: round2(rect.y),
-    w: round2(rect.w),
-    h: round2(rect.h),
+    x: roundCoord(rect.x),
+    y: roundCoord(rect.y),
+    w: roundCoord(rect.w),
+    h: roundCoord(rect.h),
   }
 }
 
 /**
  * 显示用格式化:去掉尾随的 0。
- * 100.00 → "100",100.25 → "100.25"
+ * 位数 2 时 100 → "100"、100.25 → "100.25";位数 0 时 1234.57 → "1235"。
  */
 export function formatCoord(value: number): string {
-  return String(round2(value))
+  return String(roundCoord(value))
+}
+
+// ---------------------------------------------------------------- 缩放手柄
+
+/** 八个缩放手柄。n/s/e/w 是四条边,组合起来是四个角。 */
+export type HandleId = 'nw' | 'n' | 'ne' | 'e' | 'se' | 's' | 'sw' | 'w'
+
+/** 手柄 → 鼠标指针形状。 */
+export const HANDLE_CURSORS: Record<HandleId, string> = {
+  nw: 'nwse-resize',
+  se: 'nwse-resize',
+  ne: 'nesw-resize',
+  sw: 'nesw-resize',
+  n: 'ns-resize',
+  s: 'ns-resize',
+  e: 'ew-resize',
+  w: 'ew-resize',
+}
+
+/**
+ * 拖某个手柄改变矩形。`dx/dy` 是相对**按下那一刻**的位移(图像像素)。
+ *
+ * 全程在**四条边**上做,最后才由边求宽高 —— 不能对 x 和 w 各自取整:
+ * 那样原始右边界被舍入了两次,拖左边的时候右边会跟着跳一格。
+ * 用户拖的是左边,右边一动就说明这个工具连「哪条边被拖了」都没搞清。
+ *
+ * 宽高不会变成负数:拖过头就停在最小尺寸上,而不是让框翻过来。翻过来的话,
+ * 屏幕上看还是那么一个框,数值却换成了一组相反的边界 —— 在按坐标办事的场景里,
+ * 「看着没变、数值变了」是最难查的一类问题。
+ *
+ * 最小尺寸取当前精度的一格(位数 0 时就是 1px):再小 `roundRect` 就会把它
+ * 收敛成一个零宽或零高的框,那已经不是一个框了。
+ */
+export function resizeRect(origin: Rect, handle: HandleId, dx: number, dy: number): Rect {
+  const min = 10 ** -coordDecimals.value
+
+  let left = roundCoord(origin.x)
+  let right = roundCoord(origin.x + origin.w)
+  let top = roundCoord(origin.y)
+  let bottom = roundCoord(origin.y + origin.h)
+
+  if (handle.includes('w')) left = roundCoord(origin.x + dx)
+  if (handle.includes('e')) right = roundCoord(origin.x + origin.w + dx)
+  if (handle.includes('n')) top = roundCoord(origin.y + dy)
+  if (handle.includes('s')) bottom = roundCoord(origin.y + origin.h + dy)
+
+  // 撞到下限时把**被拖的那条边**钉在距对边一格的位置:用户拖的是这条边,
+  // 让它停下来就行,对面那条不该动。
+  if (right - left < min) {
+    if (handle.includes('w')) left = right - min
+    else right = left + min
+  }
+  if (bottom - top < min) {
+    if (handle.includes('n')) top = bottom - min
+    else bottom = top + min
+  }
+
+  // 两条边都收敛过,差值还要再收敛一次:1.1 - 0.1 在浮点里是 1.0000000000000002
+  return {
+    x: left,
+    y: top,
+    w: roundCoord(right - left),
+    h: roundCoord(bottom - top),
+  }
 }

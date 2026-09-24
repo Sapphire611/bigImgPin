@@ -120,4 +120,31 @@ export interface SaveOutcome {
   fallback: boolean
 }
 
+// ---------------------------------------------------------------- 导出
+
+/**
+ * 导出用的一项坐标。
+ *
+ * 名字只有表格用得上,裁剪命令收到也会忽略它 —— 但两个命令共用一个形状,
+ * 省得在调用处来回转换。
+ */
+export interface ExportRect extends Rect {
+  name?: string
+}
+
+export interface CropOutcome {
+  dir: string
+  /** 实际写出的文件数 */
+  written: number
+  /** 每个跳过或失败的框一条,直接展示给用户 */
+  problems: string[]
+  /** 实际用的扩展名。源图是浮点/整数格式时不是 png —— 见 Rust 侧 crop_extension */
+  extension: string
+}
+
+export interface CropProgress {
+  done: number
+  total: number
+}
+
 export type ToolMode = 'pan' | 'draw'

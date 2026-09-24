@@ -37,7 +37,32 @@ export function useAnnotations() {
   // 深层响应式会把每个框都包一层 Proxy,而这个规模下没有任何一处需要它。
   const regions = shallowRef<Region[]>([])
   const guides = shallowRef<Guide[]>([])
-  const selectedId = ref<string | null>(null)
+
+  /**
+   * 选中的框。用 Set 而不是数组:画布每帧都要对每个框问一次
+   * 「你选中了吗」,数组的 includes 在框多起来之后是每帧几万次比较。
+   */
+  const selectedIds = shallowRef<Set<string>>(new Set())
+
+  /** 恰好选中一个时的那个。手柄、填入输入框这类操作只对单个框有意义。 */
+  const selectedId = computed(() =>
+    selectedIds.value.size === 1 ? [...selectedIds.value][0] : null,
+  )
+
+  function select(id: string | null) {
+    selectedIds.value = id ? new Set([id]) : new Set()
+  }
+
+  /** Ctrl / Cmd 点击:在已有选区上加减一个 */
+  function toggleSelected(id: string) {
+    const next = new Set(selectedIds.value)
+    if (!next.delete(id)) next.add(id)
+    selectedIds.value = next
+  }
+
+  function clearSelection() {
+    selectedIds.value = new Set()
+  }
 
   const history = shallowRef<Snapshot[]>([{ regions: [], guides: [] }])
   const cursor = ref(0)
@@ -62,10 +87,11 @@ export function useAnnotations() {
   function apply(snap: Snapshot) {
     regions.value = snap.regions
     guides.value = snap.guides
-    // 选中项可能已经不在还原后的状态里了(比如撤销掉一个新建的框)
-    if (selectedId.value && !snap.regions.some((r) => r.id === selectedId.value)) {
-      selectedId.value = null
-    }
+    // 只清掉已经不在还原结果里的选中项(比如撤销掉一个刚建的框)。
+    // 不做别的 —— 撤销该只改「画了什么」,不该顺手改选中态。
+    const alive = new Set(snap.regions.map((r) => r.id))
+    const kept = [...selectedIds.value].filter((id) => alive.has(id))
+    if (kept.length !== selectedIds.value.size) selectedIds.value = new Set(kept)
   }
 
   /** 只压栈。coalesce 为 true 时覆盖栈顶而不是压新的一层。 */
@@ -112,7 +138,7 @@ export function useAnnotations() {
   function reset(nextRegions: Region[], nextGuides: Guide[]) {
     regions.value = nextRegions
     guides.value = nextGuides
-    selectedId.value = null
+    clearSelection()
     history.value = [{ regions: nextRegions, guides: nextGuides }]
     cursor.value = 0
     lastNudgeAt = 0
@@ -135,7 +161,7 @@ export function useAnnotations() {
     // 拖拽画出来的框坐标来自屏幕反算,是带一长串小数的浮点数。
     const region: Region = { ...roundRect(rect), id: `r${regionSeq}`, color }
     regions.value = [...regions.value, region]
-    selectedId.value = region.id
+    select(region.id)
     commit()
     return region
   }
@@ -143,11 +169,18 @@ export function useAnnotations() {
   /**
    * 只改坐标,不记还原点 —— 拖拽过程中会连发几十次,由调用方在松手时 commit()。
    * 单独一个方法而不是给 commit 加参数:调用点要能一眼看出「这次改动会不会进撤销」。
+   *
+   * 一次改一整批:拖动多选时每个框都调一次单改的话,每一帧都要把框数组
+   * 重排 N 遍。
    */
-  function setRegionRect(id: string, rect: Rect) {
-    regions.value = regions.value.map((region) =>
-      region.id === id ? { ...region, ...roundRect(rect) } : region,
-    )
+  function setRegionsRects(updates: Array<{ id: string; rect: Rect }>) {
+    if (updates.length === 0) return
+
+    const byId = new Map(updates.map((update) => [update.id, roundRect(update.rect)]))
+    regions.value = regions.value.map((region) => {
+      const rect = byId.get(region.id)
+      return rect ? { ...region, ...rect } : region
+    })
   }
 
   /** 方向键微调。连续按键合并成一条撤销记录。 */
@@ -159,13 +192,41 @@ export function useAnnotations() {
     const merging = now - lastNudgeAt < NUDGE_COALESCE_MS
     lastNudgeAt = now
 
-    setRegionRect(id, { x: region.x + dx, y: region.y + dy, w: region.w, h: region.h })
+    setRegionsRects([
+      { id, rect: { x: region.x + dx, y: region.y + dy, w: region.w, h: region.h } },
+    ])
     push(merging)
   }
 
-  function removeRegion(id: string) {
-    regions.value = regions.value.filter((r) => r.id !== id)
-    if (selectedId.value === id) selectedId.value = null
+  /**
+   * 删除一批框。
+   *
+   * 批量删只记**一条**撤销记录 —— 删掉十个框应该一次退回来,
+   * 而不是让人按十次 Ctrl+Z。
+   */
+  function removeRegions(ids: string[]) {
+    if (ids.length === 0) return
+
+    const gone = new Set(ids)
+    regions.value = regions.value.filter((r) => !gone.has(r.id))
+
+    const kept = [...selectedIds.value].filter((id) => !gone.has(id))
+    if (kept.length !== selectedIds.value.size) selectedIds.value = new Set(kept)
+
+    commit()
+  }
+
+  /**
+   * 改名。空字符串等于去掉名字。
+   *
+   * 不存 `name: ""` 而是让它变回 undefined:空串会在标注文件里留下一个
+   * 没有意义的字段,而「有名字但内容是空的」和「没名字」在列表里也没法区分。
+   */
+  function renameRegion(id: string, name: string) {
+    const trimmed = name.trim()
+    regions.value = regions.value.map((region) =>
+      region.id === id ? { ...region, name: trimmed || undefined } : region,
+    )
     commit()
   }
 
@@ -178,7 +239,7 @@ export function useAnnotations() {
    */
   function clearRegions() {
     regions.value = []
-    selectedId.value = null
+    clearSelection()
     commit()
   }
 
@@ -204,14 +265,19 @@ export function useAnnotations() {
   return {
     regions,
     guides,
+    selectedIds,
     selectedId,
+    select,
+    toggleSelected,
+    clearSelection,
     revision,
     canUndo,
     canRedo,
     addRegion,
-    setRegionRect,
+    setRegionsRects,
     nudge,
-    removeRegion,
+    removeRegions,
+    renameRegion,
     clearRegions,
     addGuide,
     removeGuide,

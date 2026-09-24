@@ -1,7 +1,7 @@
 {
   "name": "bigimgpin",
   "private": true,
-  "version": "0.1.1",
+  "version": "0.2.0",
   "description": "Desktop viewer and annotator for gigapixel industrial imagery (layout / microscopy). Ships with its own libvips runtime.",
   "type": "module",
   "scripts": {

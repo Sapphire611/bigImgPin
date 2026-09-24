@@ -2,6 +2,7 @@
 
 mod annotations;
 mod commands;
+mod export;
 mod tiles_protocol;
 mod vips;
 
@@ -28,6 +29,8 @@ pub fn run() {
             commands::clear_cache,
             annotations::load_annotations,
             annotations::save_annotations,
+            export::export_regions_csv,
+            export::export_crops,
         ])
         .setup(|app| {
             // 启动就自检 vips,把结果推给前端。
