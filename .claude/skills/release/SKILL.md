@@ -18,11 +18,16 @@ description: Use when publishing a new bigImgPin version (发版/发布/出新�
 ## 二、发版
 
 ```bash
-npm run release -- --notes "这次改了什么"
+npm run release -- --notes-file /tmp/说明.md
 ```
 
 签名构建 → 生成 `latest.json` → 建 Release 上传。**约 5 分钟**:release 构建开了
 LTO + `codegen-units=1`,慢是正常的,别以为卡住了。
+
+**多行说明一定用 `--notes-file`,不要用 `--notes`。** 多行文本从命令行传会在
+npm → shell 那一段被按换行拆开,脚本只拿到第一行,剩下的行变成没人要的 argv,
+而且**不报错**。2026-09-24 发 v0.2.0 就是这样:Release 页面和更新弹窗里
+只剩「标注改动现在会永久保存:」半句话。`--notes` 只适合单行短说明。
 
 想先看会传哪些文件、`latest.json` 长什么样(不构建不上传):
 
@@ -40,6 +45,19 @@ curl -sL https://github.com/Sapphire611/bigImgPin/releases/latest/download/lates
 
 `version` 是刚发的版本号、`url` 指向刚传的安装包,才算成功。**404 或还是旧版本号**通常意味着:
 Release 没被标成 Latest(比如误勾了 prerelease),或者上传时资产名不是 `latest.json`。
+
+⚠️ **这个 URL 走 GitHub 的 CDN 缓存**,刚上传的资产不会立刻生效(`Cache-Control`
+显示 `Age: N`,带缓存破坏参数也没用 —— 缓存在对象层不在查询串上)。
+**刚重传过资产、要确认内容对不对时,绕开它读资产本身**:
+
+```bash
+ASSET=$(gh api repos/Sapphire611/bigImgPin/releases/tags/v0.2.0 \
+  --jq '.assets[] | select(.name=="latest.json") | .id')
+gh api "repos/Sapphire611/bigImgPin/releases/assets/$ASSET" -H "Accept: application/octet-stream"
+```
+
+只改了说明文字的话,等缓存过期(分钟级)客户端自然会拿到新的 ——
+版本号 / url / 签名在旧的那份里也是对的,更新本身不受影响。
 
 ## 四、验证更新链路(改了更新相关代码才需要)
 

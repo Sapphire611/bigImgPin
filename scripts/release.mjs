@@ -1,10 +1,13 @@
 /**
- * 一条命令发版:`node scripts/release.mjs --notes "这次改了什么"`
+ * 一条命令发版:`node scripts/release.mjs --notes-file 说明.md`
  *
  * 做四件事:签名构建 → 收集安装包 → 生成 latest.json → 用 gh 建 Release 并上传。
  * 客户端就是靠 release 里这个 latest.json 知道有新版本的,别改名。
  *
  * 版本号取自 src-tauri/tauri.conf.json,发版前先改那里。
+ *
+ * 说明文本用 `--notes-file`(多行)或 `--notes`(单行)。两者都能用时以文件为准 ——
+ * 原因见下面 notes 那段注释。
  */
 import { execFileSync } from 'node:child_process'
 import { existsSync, readdirSync, readFileSync, writeFileSync } from 'node:fs'
@@ -20,9 +23,19 @@ const conf = JSON.parse(readFileSync(confPath, 'utf8'))
 const { version, productName } = conf
 const tag = `v${version}`
 
+// 多行说明**必须**走 --notes-file。
+//
+// 从命令行传多行文本会在 npm → shell 那一段被按换行拆开:脚本只拿得到第一行,
+// 剩下的行变成没人要的 argv,而且不报错 —— 发出去才发现更新弹窗里只有半句话。
+// 2026-09-24 发 v0.2.0 时踩到过,只能事后 gh release edit 补。
+const notesFileIndex = process.argv.indexOf('--notes-file')
+const fileNotes =
+  notesFileIndex === -1 ? '' : readFileSync(process.argv[notesFileIndex + 1], 'utf8').trim()
+
 const notesIndex = process.argv.indexOf('--notes')
 const givenNotes = notesIndex === -1 ? '' : process.argv[notesIndex + 1]
-const notes = givenNotes || `${productName} ${tag}`
+
+const notes = fileNotes || givenNotes || `${productName} ${tag}`
 
 /** 不构建、不上传,只用现有产物生成 latest.json 并列出会传哪些文件 */
 const dryRun = process.argv.includes('--dry-run')

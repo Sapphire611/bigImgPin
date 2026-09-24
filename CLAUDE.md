@@ -248,8 +248,14 @@ App 里的判断顺序是**先手柄、后框**:手柄压在选中框的边框�
 
 ```bash
 # 先改 src-tauri/tauri.conf.json 里的 version
-npm run release -- --notes "这次改了什么"
+npm run release -- --notes-file /tmp/说明.md
 ```
+
+说明文本走**文件**而不是 `--notes`:多行参数会在 npm → shell 那段被按换行拆开,
+脚本只拿到第一行且不报错(v0.2.0 踩过,更新弹窗里只剩半句话)。
+
+验证时注意 `releases/latest/download/latest.json` **走 CDN 缓存**,刚重传的资产
+不会立刻生效;要确认内容得用 `gh api .../releases/assets/<id>` 绕开它。
 
 `scripts/release.mjs` 会带着私钥路径构建、生成 `latest.json`、用 `gh` 建 Release 上传。
 前置:装 GitHub CLI(`winget install --id GitHub.cli`)并 `gh auth login`。
