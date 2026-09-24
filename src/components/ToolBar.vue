@@ -21,6 +21,7 @@ const emit = defineEmits<{
   zoomToOne: []
   undo: []
   redo: []
+  settings: []
 }>()
 </script>
 
@@ -121,6 +122,25 @@ const emit = defineEmits<{
     </button>
 
     <UpdatePrompt />
+
+    <!--
+      齿轮放在最右边:它是一个入口,不是常用动作,不该跟工具抢位置。
+      **不能复用 .theme 那个类** —— 它带 margin-left:auto,两个 auto 会把空隙平分,
+      把 UpdatePrompt 甩到中间去(主题按钮那条注释里记的就是这个坑)。
+    -->
+    <button
+      class="icon"
+      title="设置:缓存与切片参数"
+      aria-label="设置"
+      @click="emit('settings')"
+    >
+      <svg viewBox="0 0 16 16" aria-hidden="true">
+        <circle cx="8" cy="8" r="2.4" />
+        <path
+          d="M8 1.6v1.7M8 12.7v1.7M1.6 8h1.7M12.7 8h1.7M3.48 3.48l1.2 1.2M11.32 11.32l1.2 1.2M12.52 3.48l-1.2 1.2M4.68 11.32l-1.2 1.2"
+        />
+      </svg>
+    </button>
   </div>
 </template>
 
@@ -173,6 +193,11 @@ const emit = defineEmits<{
    把主题开关甩到中间,所以那边已经去掉了 */
 .theme {
   margin-left: auto;
+  padding: 5px 8px;
+}
+
+/* 主题右边那些图标按钮。**不带 margin-left:auto** —— 位置已经由 .theme 推好了 */
+.icon {
   padding: 5px 8px;
 }
 

@@ -4,6 +4,17 @@ import OpenSeadragon from 'openseadragon'
 
 import type { PreparedImage, ToolMode } from '../types'
 
+/**
+ * 模式对应的基础光标。
+ *
+ * 单独导出是因为**手柄的指针形状要叠加在它之上**:悬停手柄时给 resize 形状,
+ * 离开时得还回这个基础值,不能一把清空 —— 清空会把 crosshair / grab 一起抹掉,
+ * 用户悬停过一次手柄之后光标就永远变回默认箭头了。
+ */
+export function modeCursor(mode: ToolMode): string {
+  return mode === 'pan' ? 'grab' : 'crosshair'
+}
+
 export function useViewer(getContainer: () => HTMLElement | null) {
   const viewer = shallowRef<OpenSeadragon.Viewer | null>(null)
   /** 图像已就绪。叠加层要等它为 true 才有意义。 */
@@ -109,7 +120,19 @@ export function useViewer(getContainer: () => HTMLElement | null) {
     if (!instance) return
 
     instance.gestureSettingsByDeviceType('mouse').dragToPan = mode === 'pan'
-    instance.element.style.cursor = mode === 'pan' ? 'grab' : 'crosshair'
+    instance.element.style.cursor = modeCursor(mode)
+  }
+
+  /**
+   * 关掉当前图像,留下一个空画布。
+   *
+   * 清缓存之后必须调:瓦片文件已经被删了,OSD 再去取只会一路 404,
+   * 用户盯着的是一片空白而且不知道发生了什么。
+   */
+  function close() {
+    isOpen.value = false
+    failure.value = null
+    viewer.value?.close()
   }
 
   function destroy() {
@@ -119,5 +142,5 @@ export function useViewer(getContainer: () => HTMLElement | null) {
 
   onBeforeUnmount(destroy)
 
-  return { viewer, isOpen, failure, init, load, setMode, destroy }
+  return { viewer, isOpen, failure, init, load, setMode, close, destroy }
 }

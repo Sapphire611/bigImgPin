@@ -18,6 +18,11 @@ const props = defineProps<{
   annotationFile: string | null
 }>()
 
+const emit = defineEmits<{
+  /** 点「瓦片缓存」那一格 —— 打开设置面板 */
+  settings: []
+}>()
+
 const size = computed(() => {
   if (!props.image) return '—'
   const { width, height } = props.image
@@ -98,10 +103,19 @@ const annotationText = computed(() => {
       <b>{{ annotationText }}</b>
     </span>
 
-    <span class="readout">
+    <!--
+      这一格可点:它是界面上唯一和缓存有关的数字,清理入口挂在这儿最容易被找到。
+      注意它显示的是**这张图**的占用,不是全局 —— 面板里两个数会并排给出来,
+      免得用户拿它去估计能清出多少空间。
+    -->
+    <button
+      class="readout clickable"
+      :title="`${cacheText} —— 点开清理缓存或改切片参数`"
+      @click="emit('settings')"
+    >
       <label>瓦片缓存</label>
       <b>{{ cacheText }}</b>
-    </span>
+    </button>
   </div>
 </template>
 
@@ -140,6 +154,22 @@ const annotationText = computed(() => {
 label {
   font-size: 11px;
   color: var(--text-faint);
+}
+
+/* 「瓦片缓存」那一格是按钮(可点开设置),但长相必须和其他读数**完全一样**:
+   它是读数,不是按钮,冒出个边框或底色会破坏整条状态栏的读数感。
+   全局的 button 样式要在这里被清掉,只留下和邻居相同的分隔线。 */
+.readout.clickable {
+  background: transparent;
+  border: none;
+  border-left: 1px solid var(--border);
+  border-radius: 0;
+  font: inherit;
+  cursor: pointer;
+}
+
+.readout.clickable:hover {
+  background: var(--raise);
 }
 
 b {

@@ -3,6 +3,7 @@ import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 
 import * as api from './api/tauri'
 import RectPanel from './components/RectPanel.vue'
+import SettingsPanel from './components/SettingsPanel.vue'
 import StatusBar from './components/StatusBar.vue'
 import ToolBar from './components/ToolBar.vue'
 import {
@@ -18,7 +19,8 @@ import {
   zoomRatio as calcZoomRatio,
 } from './osd/coords'
 import { useAnnotationSvg } from './osd/useAnnotationSvg'
-import { useViewer } from './osd/useViewer'
+import { modeCursor, useViewer } from './osd/useViewer'
+import { sliceParams } from './state/slicePrefs'
 import { useAnnotations } from './state/useAnnotations'
 import type {
   ExportRect,
@@ -56,6 +58,9 @@ const annotationWarning = ref<string | null>(null)
 const notice = ref<string | null>(null)
 /** 裁剪导出的进度。null 表示没有在导出。 */
 const cropping = ref<{ done: number; total: number } | null>(null)
+
+/** 设置面板(缓存维护 + 切片参数)开着没有 */
+const settingsOpen = ref(false)
 
 const vipsStatus = ref<VipsStatus | null>(null)
 const errorMessage = ref<string | null>(null)
@@ -222,13 +227,13 @@ function pointerToImage(event: PointerEvent): { x: number; y: number } | null {
 /**
  * 手柄的指针形状。悬停时给个提示,否则用户不知道框边上那几个方块能拖。
  *
- * 只在自己这一层设内联样式,清的时候写回空串让 OSD 的样式表接管 ——
- * 记着 OSD 原来是什么再写回去,迟早会跟它的内部实现脱节。
+ * 离开手柄时还回**模式的基础光标**,不是清空 —— 顺手清成空串会把画框模式的
+ * crosshair 一起抹掉,表现为「悬停过一次手柄,光标就永远变回箭头」。
  */
 function syncHandleCursor(handle: HandleId | null) {
   const element = viewerApi.viewer.value?.element
   if (!element) return
-  const next = handle ? HANDLE_CURSORS[handle] : ''
+  const next = handle ? HANDLE_CURSORS[handle] : modeCursor(mode.value)
   if (element.style.cursor !== next) element.style.cursor = next
 }
 
@@ -449,6 +454,11 @@ function onKeyDown(event: KeyboardEvent) {
   }
 
   if (event.key === 'Escape') {
+    // 设置面板在最上层,先关它 —— 否则会「关了面板又顺手把框的选中也取消了」
+    if (settingsOpen.value) {
+      settingsOpen.value = false
+      return
+    }
     // 先收掉可能正在进行的拖拽,再取消选中
     overlay.setDraft(null)
     drag = null
@@ -623,6 +633,29 @@ async function exportCrops(rects: ExportRect[]) {
   }
 }
 
+// ---------------------------------------------------------------- 设置
+
+/**
+ * 缓存被清空了。
+ *
+ * 当前图必须一起关掉:它的瓦片文件已经没了,留着只会是一片空白。关掉之后回到
+ * 「还没有打开图片」,用户重新打开会正常走一遍切片。
+ *
+ * 标注不受影响 —— 它们存在图片旁边,和瓦片缓存是两个地方。
+ */
+function onCacheCleared() {
+  settingsOpen.value = false
+  if (!image.value) return
+
+  viewerApi.close()
+  image.value = null
+  annotations.reset([], [])
+  annotationFile.value = null
+  annotationWarning.value = null
+  // 图都没了,再自动保存就会往一个没有对应图像的路径写
+  saveEnabled = false
+}
+
 /** 把视图移到指定框。框比视口大就缩放到装得下,否则只平移不改缩放。 */
 function focusRegion(region: Region) {
   const viewer = viewerApi.viewer.value
@@ -656,7 +689,7 @@ async function openImage() {
 async function loadPath(path: string) {
   slicing.value = { percent: 0, tilesDone: 0, tilesTotal: 0 }
   try {
-    const prepared = await api.prepareImage(path)
+    const prepared = await api.prepareImage(path, sliceParams())
     // 标注先取回来(异步),再和图像一起换上去(同步,中间不插 await)。
     // 读不到就是空的,旧图的框不会被带过来 —— 它们对新图的坐标没有意义。
     const loaded = await fetchAnnotations(prepared.sourcePath)
@@ -713,6 +746,7 @@ function onGridToggle(enabled: boolean) {
       @zoom-to-one="zoomToOne"
       @undo="annotations.undo"
       @redo="annotations.redo"
+      @settings="settingsOpen = true"
     />
 
     <div class="body">
@@ -814,6 +848,17 @@ function onGridToggle(enabled: boolean) {
       :grid-enabled="gridEnabled"
       :region-count="regions.length"
       :annotation-file="annotationFile"
+      @settings="settingsOpen = true"
+    />
+
+    <!-- 缓存维护和切片参数放在一起:改了切片参数会让已切过的图重切一份, -->
+    <!-- 而清缓存是抹掉所有旧瓦片 —— 用户得在同一个地方看到这个因果 -->
+    <SettingsPanel
+      v-if="settingsOpen"
+      :image="image"
+      :slicing="slicing !== null"
+      @close="settingsOpen = false"
+      @cleared="onCacheCleared"
     />
   </div>
 </template>
