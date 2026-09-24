@@ -30,6 +30,32 @@ cargo test cache_key_changes_with_slice_params   # 单个测试
 `tauri dev`。Rust 侧的 `#[cfg(test)]` 覆盖在 `src-tauri/src/*.rs` 文件末尾,改到这些
 纯函数时同步改测试。
 
+## 验证界面改动:连客户端的 CDP
+
+前端没有测试框架,但界面不是只能靠人肉点。WebView2 支持远程调试:
+
+```bash
+npm run dev:web &                    # debug 产物在 dev 模式下就是连它
+WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS="--remote-debugging-port=9222" \
+  ./src-tauri/target/debug/bigimgpin.exe
+curl -s http://127.0.0.1:9222/json/list   # 拿 webSocketDebuggerUrl,之后用 CDP 驱动
+```
+
+CDP 的 `Input.dispatchMouseEvent` / `dispatchKeyEvent` 走 Chromium 完整的输入管线,
+**pointerdown/move/up 都会真触发** —— 拖手柄、Ctrl 点多选、按 Delete 都能验,
+不是「模拟调用一下事件处理函数」。
+
+断言读 DOM,或者读
+`document.querySelector('#app')._vnode.component.setupState`(dev 构建下 setup state
+是暴露的,`regions` / `selectedIds` / `loadPath` 都拿得到)。注意 setupState 里的
+ref 已经自动解包,别再写 `.value`。
+
+**加载图片不用点原生对话框**:`setupState.loadPath('C:/path/to/img.tif')` 直接调。
+但导出用的保存 / 选目录对话框是系统画的,CDP 驱动不了,那一段只能人点。
+
+比截图可靠得多:拿到的是坐标、选区、DOM 结构和磁盘上的文件,不是像素 ——
+而截图在本机 125% DPI 下本来就不可信。
+
 ## 运行前置:libvips
 
 vips 是**外部二进制,不是链接进来的库**,运行时才定位(见 `src-tauri/src/vips.rs`
