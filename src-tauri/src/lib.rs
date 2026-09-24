@@ -1,5 +1,6 @@
 //! 应用入口与组装。
 
+mod annotations;
 mod commands;
 mod tiles_protocol;
 mod vips;
@@ -25,6 +26,8 @@ pub fn run() {
             commands::cancel_slicing,
             commands::cache_stats,
             commands::clear_cache,
+            annotations::load_annotations,
+            annotations::save_annotations,
         ])
         .setup(|app| {
             // 启动就自检 vips,把结果推给前端。

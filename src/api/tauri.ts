@@ -3,7 +3,17 @@ import { invoke } from '@tauri-apps/api/core'
 import { listen, type UnlistenFn } from '@tauri-apps/api/event'
 import { check } from '@tauri-apps/plugin-updater'
 
-import type { PreparedImage, SliceParams, TileProgress, VipsInfo, VipsStatus } from '../types'
+import type {
+  Guide,
+  LoadedAnnotations,
+  PreparedImage,
+  Region,
+  SaveOutcome,
+  SliceParams,
+  TileProgress,
+  VipsInfo,
+  VipsStatus,
+} from '../types'
 
 /** vips 不可用时 reject,错误信息里带安装指引。 */
 export function vipsInfo(): Promise<VipsInfo> {
@@ -34,6 +44,27 @@ export function cacheStats(): Promise<[number, number]> {
 
 export function clearCache(): Promise<void> {
   return invoke<void>('clear_cache')
+}
+
+// ---------------------------------------------------------------- 标注
+
+/** 读回源图旁边的标注文件。没有文件是正常情况(doc 为 null)。 */
+export function loadAnnotations(path: string): Promise<LoadedAnnotations> {
+  return invoke<LoadedAnnotations>('load_annotations', { path })
+}
+
+/**
+ * 写标注。尺寸要一起送过去 —— 文件里要记住这份标注是贴着多大的图存的,
+ * 换了图才能发现。
+ */
+export function saveAnnotations(
+  path: string,
+  width: number,
+  height: number,
+  regions: Region[],
+  guides: Guide[],
+): Promise<SaveOutcome> {
+  return invoke<SaveOutcome>('save_annotations', { path, width, height, regions, guides })
 }
 
 export function onTileProgress(

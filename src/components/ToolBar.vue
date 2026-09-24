@@ -9,6 +9,8 @@ defineProps<{
   hasImage: boolean
   /** 图像就绪前,缩放类按钮都要禁用 */
   ready: boolean
+  canUndo: boolean
+  canRedo: boolean
 }>()
 
 const emit = defineEmits<{
@@ -17,6 +19,8 @@ const emit = defineEmits<{
   'update:gridEnabled': [boolean]
   zoomToFit: []
   zoomToOne: []
+  undo: []
+  redo: []
 }>()
 </script>
 
@@ -80,6 +84,13 @@ const emit = defineEmits<{
     </div>
 
     <span class="divider" />
+
+    <!--
+      撤销/重做用普通按钮而不是凹槽:凹槽那套语言的含义是「这几个里当前是哪个」,
+      而这两个是动作,没有「当前」可言。
+    -->
+    <button :disabled="!canUndo" title="撤销(Ctrl+Z)" @click="emit('undo')">撤销</button>
+    <button :disabled="!canRedo" title="重做(Ctrl+Shift+Z)" @click="emit('redo')">重做</button>
 
     <button :disabled="!hasImage" title="缩放到适应窗口" @click="emit('zoomToFit')">适应窗口</button>
     <button

@@ -198,7 +198,13 @@ function loadFrom(region: Region) {
         </li>
       </ul>
 
-      <button v-if="regions.length > 0" class="wide danger" @click="emit('clearRegions')">
+      <!-- 不做二次确认:撤销更顺手,而确认框点多了就变成闭眼按「确定」 -->
+      <button
+        v-if="regions.length > 0"
+        class="wide danger"
+        title="清空所有框(误点了按 Ctrl+Z 撤销)"
+        @click="emit('clearRegions')"
+      >
         清空全部框
       </button>
     </section>

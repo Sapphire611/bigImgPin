@@ -14,6 +14,8 @@ const props = defineProps<{
   gridStep: number
   gridEnabled: boolean
   regionCount: number
+  /** 标注写到哪个文件了。null 表示还没写过 —— 空标注不会落盘。 */
+  annotationFile: string | null
 }>()
 
 const size = computed(() => {
@@ -43,6 +45,16 @@ const cacheText = computed(() => {
   return props.image.fromCache
     ? `${formatBytes(props.image.cacheBytes)} (已缓存)`
     : `${formatBytes(props.image.cacheBytes)} (本次生成)`
+})
+
+/**
+ * 只显示文件名,完整路径挂到 title 上。
+ * 路径动辄七八十个字符,整条塞进来会把左边的读数全挤出屏幕。
+ */
+const annotationText = computed(() => {
+  if (!props.image) return '—'
+  if (!props.annotationFile) return '未保存'
+  return props.annotationFile.split(/[\\/]/).pop() || props.annotationFile
 })
 </script>
 
@@ -79,6 +91,12 @@ const cacheText = computed(() => {
     </span>
 
     <span class="spacer" />
+
+    <!-- 自动保存是看不见的,得有一处告诉用户「刚才那下确实存下去了」 -->
+    <span class="readout" :title="annotationFile ?? '改动后会自动存到图片旁边'">
+      <label>标注</label>
+      <b>{{ annotationText }}</b>
+    </span>
 
     <span class="readout">
       <label>瓦片缓存</label>
