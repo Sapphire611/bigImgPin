@@ -23,7 +23,10 @@ export function useViewer(getContainer: () => HTMLElement | null) {
       showNavigator: true,
       navigatorPosition: 'BOTTOM_RIGHT',
       navigatorSizeRatio: 0.15,
-      navigatorBorderColor: '#444',
+      // 小地图的边框和底色由 styles.css 统一管(带 !important 压过 OSD 的行内样式),
+      // 这里就不再给一个写死的颜色。
+      // 顺带记一笔:OSD v6 没有 viewer 级的背景选项(旧版的 backgroundColor 已经没了,
+      // 硬传会被 TS 挡下来)。容器默认透明,画布围边就是 .stage 的 --stage,正好跟着主题走。
       animationTime: 0.4,
       zoomPerScroll: 1.4,
       // 允许放大到 1:1 的 8 倍以便看清单个像素;

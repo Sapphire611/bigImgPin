@@ -155,7 +155,7 @@ function loadFrom(region: Region) {
       </div>
       <div v-else class="preview empty">填入完整的 x, y, w, h 后显示结果</div>
 
-      <button class="wide" :disabled="!transformed" @click="addTransformed">生成框</button>
+      <button class="wide solid" :disabled="!transformed" @click="addTransformed">生成框</button>
 
       <p v-if="isIdentityTransform && transformed" class="hint">
         偏移/系数未填,按原值生成
@@ -198,7 +198,7 @@ function loadFrom(region: Region) {
         </li>
       </ul>
 
-      <button v-if="regions.length > 0" class="wide ghost" @click="emit('clearRegions')">
+      <button v-if="regions.length > 0" class="wide danger" @click="emit('clearRegions')">
         清空全部框
       </button>
     </section>
@@ -229,7 +229,7 @@ function loadFrom(region: Region) {
           </li>
         </ul>
 
-        <button class="wide ghost" @click="emit('clearGuides')">清空辅助线</button>
+        <button class="wide danger" @click="emit('clearGuides')">清空辅助线</button>
       </template>
     </section>
   </div>
@@ -239,8 +239,8 @@ function loadFrom(region: Region) {
 .panel {
   width: 268px;
   flex-shrink: 0;
-  background: #23262b;
-  border-left: 1px solid #33383f;
+  background: var(--panel);
+  border-left: 1px solid var(--border);
   overflow-y: auto;
   padding: 12px;
   display: flex;
@@ -259,20 +259,20 @@ h3 {
   margin: 0;
   font-size: 12px;
   font-weight: 600;
-  color: #9aa3ae;
-  text-transform: uppercase;
-  letter-spacing: 0.5px;
+  color: var(--text-dim);
   display: flex;
   align-items: center;
   gap: 6px;
 }
 
+/* 徽章用 --stage 而不是 --raise:浅色主题下 --raise 是纯白,贴在 --panel 上看不出来 */
 .count {
-  background: #3a3f47;
-  border-radius: 8px;
+  background: var(--stage);
+  border-radius: var(--r-md);
   padding: 1px 7px;
   font-size: 11px;
-  color: #d6dae0;
+  font-variant-numeric: tabular-nums;
+  color: var(--text-dim);
 }
 
 .grid {
@@ -285,7 +285,7 @@ label {
   display: flex;
   align-items: center;
   gap: 6px;
-  color: #6c757f;
+  color: var(--text-faint);
 }
 
 .grid label {
@@ -294,21 +294,16 @@ label {
   gap: 2px;
 }
 
+/* 输入框做成凹进去的井:底色比 panel 深/浅一层,再加一圈比 --border 更实的边。
+   它整个边界都靠这两样说明,不像按钮还有标签兜底。 */
 input {
   width: 100%;
-  box-sizing: border-box;
   padding: 5px 8px;
-  border-radius: 5px;
-  border: 1px solid #3d434b;
-  background: #1c1f23;
-  color: #d6dae0;
+  border-radius: var(--r-sm);
+  border: 1px solid var(--border-strong);
+  background: var(--stage);
+  color: var(--text);
   font-size: 12px;
-  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-}
-
-input:focus {
-  outline: none;
-  border-color: #3f78c4;
 }
 
 .factor {
@@ -319,52 +314,45 @@ input:focus {
   width: 92px;
 }
 
-button {
-  padding: 6px 10px;
-  border-radius: 5px;
-  border: 1px solid #3d434b;
-  background: #2b2f36;
-  color: #d6dae0;
-  font-size: 12px;
-  cursor: pointer;
-}
-
-button:hover:not(:disabled) {
-  background: #353a43;
-}
-
-button:disabled {
-  opacity: 0.4;
-  cursor: not-allowed;
-}
-
 .wide {
   width: 100%;
-  background: #2f5d9e;
-  border-color: #3f78c4;
-  color: #fff;
 }
 
-.wide:hover:not(:disabled) {
-  background: #376bb4;
-}
-
-.wide.ghost {
+/* 列表行里的三个小按钮做成无边框的:一行里并排三个描边按钮太吵,
+   而它们在 268px 的面板里只是次要操作 */
+button.mini {
+  padding: 2px 7px;
+  font-size: 11px;
   background: transparent;
-  border-color: #4a3a3a;
-  color: #c98a8a;
+  border-color: transparent;
+  color: var(--text-dim);
 }
 
-.wide.ghost:hover {
-  background: #33282a;
+/* 底色用 --stage 而不是 --raise:行本身 hover/选中时就是 --raise,
+   再叠一层同色的 hover 会完全看不出按到了 */
+button.mini:hover:not(:disabled) {
+  background: var(--stage);
+  border-color: transparent;
+  color: var(--text);
+}
+
+/* 删除按钮的红色要撑过 hover —— 上面那条 hover 会把颜色拉回 --text,
+   而具体色值相同,权重更高的这条正好盖住它 */
+button.mini.danger,
+button.mini.danger:hover:not(:disabled) {
+  color: var(--danger-text);
+}
+
+button.mini.danger:hover:not(:disabled) {
+  background: var(--danger-bg);
 }
 
 .formula,
 .hint {
   margin: 0;
   font-size: 11px;
-  color: #6c757f;
-  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  color: var(--text-faint);
+  font-family: var(--font-mono);
 }
 
 /* 变换公式有三行,行高太挤会看不清哪行是哪行 */
@@ -374,30 +362,29 @@ button:disabled {
 
 .preview {
   padding: 6px 8px;
-  border-radius: 5px;
-  background: #1c1f23;
-  border: 1px solid #33383f;
-  color: #7fc08a;
+  border-radius: var(--r-sm);
+  background: var(--stage);
+  border: 1px solid var(--border);
+  color: var(--ok-text);
   font-size: 12px;
 }
 
 .preview.empty {
-  color: #5a626b;
+  color: var(--text-faint);
   font-family: inherit;
 }
 
 .preview.warn {
-  color: #d9a441;
-  border-color: #4a3f2a;
+  color: var(--warn-text);
 }
 
 .warn-text {
-  color: #d9a441;
+  color: var(--warn-text);
 }
 
 .empty {
   margin: 0;
-  color: #5a626b;
+  color: var(--text-faint);
   line-height: 1.5;
 }
 
@@ -417,18 +404,19 @@ button:disabled {
   align-items: center;
   gap: 6px;
   padding: 4px 6px;
-  border-radius: 5px;
+  border-radius: var(--r-sm);
   cursor: pointer;
-  border: 1px solid transparent;
 }
 
 .list li:hover {
-  background: #2b2f36;
+  background: var(--raise);
 }
 
+/* 选中不靠颜色 —— chrome 里没有颜色可用。用左边一道实心标记,
+   不占布局(inset shadow),也不随 hover 变化,扫一眼就能定位到是哪一行。 */
 .list li.selected {
-  background: #2a3a52;
-  border-color: #3f78c4;
+  background: var(--raise);
+  box-shadow: inset 2px 0 0 var(--text);
 }
 
 .dot {
@@ -439,7 +427,7 @@ button:disabled {
 }
 
 .idx {
-  color: #6c757f;
+  color: var(--text-faint);
   width: 14px;
   flex-shrink: 0;
 }
@@ -454,14 +442,14 @@ button:disabled {
 }
 
 .pos {
-  color: #d6dae0;
+  color: var(--text);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
 .size {
-  color: #7f8994;
+  color: var(--text-dim);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -486,23 +474,12 @@ button:disabled {
   opacity: 1;
 }
 
+/* 用画布上那条辅助线自己的颜色,一眼对上号 —— 这是全文件里唯一一处
+   「颜色当信息用」的地方 */
 .axis {
-  color: #ffd666;
+  color: var(--guide);
   width: 14px;
   flex-shrink: 0;
   text-align: center;
-}
-
-.mini {
-  padding: 2px 6px;
-  font-size: 11px;
-}
-
-.mini.danger {
-  color: #d98a8a;
-}
-
-.mono {
-  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
 }
 </style>

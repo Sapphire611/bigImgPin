@@ -160,7 +160,7 @@ function dismiss() {
           </button>
           <button
             v-if="canInstall"
-            class="primary"
+            class="solid"
             :disabled="phase === 'installing'"
             @click="install"
           >
@@ -178,34 +178,13 @@ function dismiss() {
   display: flex;
   align-items: center;
   gap: 10px;
-  /* 工具栏是 flex,把自己推到最右边 */
-  margin-left: auto;
-}
-
-button {
-  padding: 6px 14px;
-  border-radius: 6px;
-  border: 1px solid #3d434b;
-  background: #2b2f36;
-  color: #d6dae0;
-  font-size: 13px;
-  cursor: pointer;
-  white-space: nowrap;
-  transition: background 0.12s, border-color 0.12s;
-}
-
-button:hover:not(:disabled) {
-  background: #353a43;
-}
-
-button:disabled {
-  opacity: 0.55;
-  cursor: default;
+  /* 位置交给工具栏 —— 它把自己推到最右边的那个按钮身上(见 ToolBar 的 .theme)。
+     这里再加一个 margin-left:auto 会和那个平分空隙,把主题开关甩到中间去 */
 }
 
 .toast {
   font-size: 12px;
-  color: #9aa3ae;
+  color: var(--text-dim);
   max-width: 340px;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -219,31 +198,31 @@ button:disabled {
   display: flex;
   align-items: center;
   justify-content: center;
-  background: rgba(0, 0, 0, 0.55);
+  background: var(--scrim);
 }
 
 .dialog {
   width: 460px;
   max-width: calc(100vw - 48px);
-  background: #23262b;
-  border: 1px solid #3a3f47;
-  border-radius: 10px;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: var(--r-xl);
   padding: 22px 26px;
-  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.5);
+  box-shadow: var(--shadow);
 }
 
 .dialog h3 {
   margin: 0 0 12px;
   font-size: 15px;
   font-weight: 500;
-  color: #d6dae0;
+  color: var(--text);
 }
 
 .hint {
   margin: 0 0 12px;
   font-size: 13px;
   line-height: 1.7;
-  color: #9aa3ae;
+  color: var(--text-dim);
 }
 
 .notes {
@@ -251,12 +230,12 @@ button:disabled {
   padding: 10px 12px;
   max-height: 200px;
   overflow: auto;
-  background: #1c1f23;
-  border: 1px solid #33383f;
-  border-radius: 6px;
+  background: var(--stage);
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
   font-size: 12px;
   line-height: 1.6;
-  color: #8f98a3;
+  color: var(--text-dim);
   white-space: pre-wrap;
   word-break: break-word;
 }
@@ -265,10 +244,10 @@ button:disabled {
   margin: 0 0 14px;
   font-size: 12px;
   line-height: 1.6;
-  color: #e8b0b0;
-  background: #3a2426;
-  border: 1px solid #6b3a3e;
-  border-radius: 6px;
+  color: var(--danger-text);
+  background: var(--danger-bg);
+  border: 1px solid var(--danger-border);
+  border-radius: var(--r-md);
   padding: 8px 12px;
   word-break: break-word;
 }
@@ -279,19 +258,9 @@ button:disabled {
   gap: 10px;
 }
 
-button.primary {
-  background: #2f5d9e;
-  border-color: #3f78c4;
-  color: #fff;
-}
-
-button.primary:hover:not(:disabled) {
-  background: #376bb4;
-}
-
 .dim {
   margin: 14px 0 0;
   font-size: 12px;
-  color: #5a626b;
+  color: var(--text-faint);
 }
 </style>

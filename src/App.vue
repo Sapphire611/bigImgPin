@@ -235,7 +235,13 @@ function onPointerLeave() {
   cursor.value = null
 }
 
-/** 双击:在当前位置放一条辅助线,便于对齐。Shift 加竖线,否则加横线。 */
+/**
+ * 双击:在当前位置放一条辅助线,便于对齐。Shift 加竖线,否则加横线。
+ *
+ * 辅助线颜色**不跟主题走**:它画在图上,不画在界面上,判断依据是「在任意图像内容
+ * 上都能看见」,跟界面是深色还是浅色没关系。换主题时标注凭空变色反而是干扰。
+ * 侧栏里那个同色的小图标见 --guide。
+ */
 function onDoubleClick(event: MouseEvent) {
   const viewer = viewerApi.viewer.value
   if (!viewer || !image.value) return
@@ -424,7 +430,7 @@ function onGridToggle(enabled: boolean) {
             </template>
           </p>
           <p class="dim">超大图首次切片需要几分钟,期间界面可以正常操作。</p>
-          <button class="cancel" @click="api.cancelSlicing()">取消</button>
+          <button class="danger" @click="api.cancelSlicing()">取消</button>
         </div>
 
         <div v-if="errorMessage" class="error">
@@ -479,7 +485,8 @@ function onGridToggle(enabled: boolean) {
   position: relative;
   flex: 1;
   min-width: 0;
-  background: #16181b;
+  /* OSD 的底色被设成了 transparent(见 useViewer),画布围边就是这一层 */
+  background: var(--stage);
 }
 
 .viewer {
@@ -495,20 +502,20 @@ function onGridToggle(enabled: boolean) {
   align-items: center;
   justify-content: center;
   text-align: center;
-  color: #6c757f;
+  color: var(--text-faint);
   pointer-events: none;
   padding: 32px;
 }
 
 .placeholder h2 {
   margin: 0 0 12px;
-  font-size: 17px;
+  font-size: 16px;
   font-weight: 500;
-  color: #9aa3ae;
+  color: var(--text-dim);
 }
 
 .placeholder h2.bad {
-  color: #d98a8a;
+  color: var(--danger-text);
 }
 
 .placeholder p {
@@ -518,22 +525,19 @@ function onGridToggle(enabled: boolean) {
 }
 
 .dim {
-  color: #5a626b;
+  color: var(--text-faint);
   font-size: 12px;
-}
-
-.mono {
-  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
 }
 
 .detail {
   text-align: left;
-  background: #1c1f23;
-  border: 1px solid #3a3f47;
-  border-radius: 6px;
+  background: var(--stage);
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
   padding: 12px;
+  font-family: var(--font-mono);
   font-size: 12px;
-  color: #9aa3ae;
+  color: var(--text-dim);
   max-width: 520px;
   overflow-x: auto;
   white-space: pre-wrap;
@@ -544,25 +548,25 @@ function onGridToggle(enabled: boolean) {
   top: 50%;
   left: 50%;
   transform: translate(-50%, -50%);
-  background: #23262b;
-  border: 1px solid #3a3f47;
-  border-radius: 10px;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: var(--r-xl);
   padding: 22px 26px;
   width: 380px;
   text-align: center;
-  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.5);
+  box-shadow: var(--shadow);
 }
 
 .slicing h3 {
   margin: 0 0 14px;
   font-size: 14px;
   font-weight: 500;
-  color: #d6dae0;
+  color: var(--text);
 }
 
 .bar {
   height: 6px;
-  background: #1c1f23;
+  background: var(--stage);
   border-radius: 3px;
   overflow: hidden;
   margin-bottom: 10px;
@@ -570,7 +574,7 @@ function onGridToggle(enabled: boolean) {
 
 .fill {
   height: 100%;
-  background: #3f78c4;
+  background: var(--solid);
   transition: width 0.25s ease-out;
 }
 
@@ -578,19 +582,10 @@ function onGridToggle(enabled: boolean) {
   margin: 4px 0;
 }
 
-.cancel {
+/* 取消按钮用全局的 .danger:它坐在弹窗底部,不能被主按钮抢走注意力 */
+.danger {
   margin-top: 12px;
-  padding: 6px 18px;
-  border-radius: 6px;
-  border: 1px solid #4a3a3a;
-  background: transparent;
-  color: #c98a8a;
-  font-size: 12px;
-  cursor: pointer;
-}
-
-.cancel:hover {
-  background: #33282a;
+  padding: 5px 18px;
 }
 
 .error {
@@ -601,11 +596,11 @@ function onGridToggle(enabled: boolean) {
   display: flex;
   align-items: flex-start;
   gap: 12px;
-  background: #3a2426;
-  border: 1px solid #6b3a3e;
-  border-radius: 8px;
+  background: var(--danger-bg);
+  border: 1px solid var(--danger-border);
+  border-radius: var(--r-lg);
   padding: 10px 14px;
-  color: #e8b0b0;
+  color: var(--danger-text);
   font-size: 12px;
 }
 
@@ -617,12 +612,15 @@ function onGridToggle(enabled: boolean) {
 
 .error button {
   flex-shrink: 0;
-  background: transparent;
-  border: 1px solid #6b3a3e;
-  border-radius: 5px;
-  color: #e8b0b0;
   padding: 3px 10px;
   font-size: 11px;
-  cursor: pointer;
+  background: transparent;
+  border-color: var(--danger-border);
+  color: var(--danger-text);
+}
+
+.error button:hover:not(:disabled) {
+  background: var(--danger-bg);
+  border-color: var(--danger-border);
 }
 </style>

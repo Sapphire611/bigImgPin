@@ -1,25 +1,116 @@
-/* 全局基础样式。深色主题:看图工具长时间盯着图像,浅色界面会干扰判读。 */
+/*
+ * 全局样式与主题令牌。
+ *
+ * 配色只有一条规则:**界面(下称 chrome)零彩度**。
+ *
+ * 工具栏、侧栏、状态栏、按钮全是纯中性灰,一个色相都不带。原因不是审美偏好:
+ * 界面里任何一点色偏,眼睛适应之后都会把它当成基准,于是旁边那张图里的中性灰
+ * 会被看偏成暖色或冷色。这工具就是让人盯着图下判断的,经不起这个干扰。
+ *
+ * 于是「选中 / 激活」不能靠彩色表达,改用**明度反转**:--solid 在深色主题下是
+ * 亮的,在浅色主题下是暗的,同一个令牌两套取值。组件只写 var(--solid),
+ * 不需要知道当前是哪套主题。
+ *
+ * 颜色只允许出现在三处:用户自己画的框、辅助线,和报错。它们是**数据**,不是界面。
+ *
+ * 两套取值都在这个文件里。组件里不要再写任何 hex —— 写了那个地方就不会跟着主题变。
+ * 唯一例外是 useAnnotationSvg.ts 里的叠加层配色,那些线画在图上而不是界面上,
+ * 跟着界面主题变反而会让标注在换主题时凭空变色。
+ */
 
 :root {
+  /* 深色是默认值。主题由 JS 在挂载前写到 <html data-theme> 上(见 theme.ts),
+     所以这里不做 prefers-color-scheme 查询 —— 主题只能有一个决定者,
+     两处判断迟早会打架。 */
   color-scheme: dark;
 
-  --bg: #16181b;
-  --panel: #23262b;
-  --border: #33383f;
-  --text: #d6dae0;
-  --text-dim: #9aa3ae;
-  --text-faint: #6c757f;
-  --accent: #3f78c4;
+  /* ---------------------------------------------------------- 形状与字体 */
 
-  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC',
-    'Hiragino Sans GB', 'Microsoft YaHei', Roboto, sans-serif;
-  font-size: 14px;
-  line-height: 1.5;
-  color: var(--text);
-  background: var(--bg);
+  --r-sm: 4px;
+  --r-md: 6px;
+  --r-lg: 8px;
+  --r-xl: 12px;
 
-  -webkit-font-smoothing: antialiased;
-  -moz-osx-font-smoothing: grayscale;
+  /* Segoe UI Variable 是 Win11 才有的,排在 Segoe UI 前面拿到更好的字重过渡 */
+  --font-ui: -apple-system, BlinkMacSystemFont, 'Segoe UI Variable Text', 'Segoe UI',
+    'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei UI', 'Microsoft YaHei', Roboto,
+    sans-serif;
+  --font-mono: ui-monospace, 'Cascadia Mono', Consolas, SFMono-Regular, Menlo, monospace;
+
+  /* -------------------------------------------------------------- 深色 */
+
+  /* 画面围边 + 状态栏,整个界面里最暗的一层,让图浮起来 */
+  --stage: #17181a;
+  /* 工具栏、侧栏、弹窗 */
+  --panel: #1f2022;
+  /* 按钮、列表项这类浮在 panel 上的表面 */
+  --raise: #2a2b2e;
+  --raise-hover: #35363a;
+
+  --border: #37383b;
+  /* 输入框和分段控件的外框。它们靠边框说明边界,得比 --border 更清楚一档。
+     取值受无障碍约束:输入框的边界除了这圈边没有别的东西说明(WCAG 1.4.11 要 3:1),
+     所以它比 --border 亮得多是必须的,不是手滑 */
+  --border-strong: #6a6c72;
+
+  /* 三档文字都按 4.5:1 卡过(最暗的底是 --panel #1f2022):
+     text 12.0 / textDim 6.8 / textFaint 4.7。
+     textFaint 用在占位提示、输入框标签、读数标签这些**真要去读**的小字上,
+     不能再暗 —— 再暗一档就只有 3.2 了。 */
+  --text: #dcdde0;
+  --text-dim: #a5a8ae;
+  --text-faint: #878a90;
+
+  /* 「激活」的实心底。深浅两套主题里取值相反,见文件头 */
+  --solid: #dcdde0;
+  --solid-text: #17181a;
+
+  --danger-text: #e2958f;
+  --danger-bg: #352528;
+  --danger-border: #6e4144;
+  --warn-text: #d9a441;
+  --ok-text: #86c78f;
+  /* 辅助线在画布上是亮琥珀,侧栏里用它标同类项 */
+  --guide: #ffd666;
+
+  --shadow: 0 12px 40px rgba(0, 0, 0, 0.55);
+  --scrim: rgba(0, 0, 0, 0.55);
+  /* 小地图里「当前视野」那块半透明罩子。写死 rgba 而不是用 color-mix ——
+     color-mix 要 Chromium 111+,旧 WebView2 上整条声明会被丢掉,小地图就没有视野框了 */
+  --navigator-veil: rgba(220, 221, 224, 0.16);
+}
+
+:root[data-theme='light'] {
+  color-scheme: light;
+
+  /* 不用纯白:图里本来就有大片白,围边必须能和白分开 */
+  --stage: #e9eaec;
+  --panel: #fafafb;
+  --raise: #ffffff;
+  --raise-hover: #eef0f2;
+
+  --border: #d7d9dc;
+  --border-strong: #8b9098;
+
+  /* 同样按 4.5:1 卡过:16.2 / 7.2 / 5.3。textFaint 卡在 --stage(#e9eaec)上的 4.6,
+     所以比"看着差不多"要深一些 */
+  --text: #1c1d1f;
+  --text-dim: #52555c;
+  --text-faint: #656870;
+
+  --solid: #26282c;
+  --solid-text: #fafafb;
+
+  --danger-text: #a3231b;
+  --danger-bg: #fdeceb;
+  --danger-border: #eeb2ad;
+  --warn-text: #7d5a14;
+  --ok-text: #2c6e3a;
+  --guide: #946414;
+
+  --shadow: 0 12px 40px rgba(0, 0, 0, 0.16);
+  --scrim: rgba(0, 0, 0, 0.3);
+  --navigator-veil: rgba(28, 29, 31, 0.14);
 }
 
 * {
@@ -35,8 +126,17 @@ body,
   overflow: hidden;
 }
 
-/* 桌面应用里选中文字没有意义,而且拖动时会意外选中界面文字 */
 body {
+  font-family: var(--font-ui);
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--text);
+  background: var(--stage);
+
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+
+  /* 桌面应用里选中文字没有意义,而且拖动时会意外选中界面文字 */
   user-select: none;
   -webkit-user-select: none;
 }
@@ -48,8 +148,7 @@ textarea {
   -webkit-user-select: text;
 }
 
-/* 数字输入框的上下箭头在深色主题下很难看,而且这里都是精确输入,
-   微调按钮没有价值 */
+/* 数字输入框的上下箭头很难看,而且这里都是精确输入,微调按钮没有价值 */
 input[type='number']::-webkit-outer-spin-button,
 input[type='number']::-webkit-inner-spin-button {
   -webkit-appearance: none;
@@ -61,10 +160,90 @@ input[type='number'] {
   appearance: textfield;
 }
 
-/* 滚动条 */
+/*
+ * 读数一律等宽 + 等宽数字。
+ *
+ * tabular-nums 比 font-family 更要紧:坐标、缩放、计数每帧都在变,
+ * 比例数字的字符宽度不一样,整行会跟着左右抖 —— 需要盯着比对读数时非常难受。
+ */
+.mono,
+input[type='number'] {
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+}
+
+/* 键盘焦点必须看得见。chrome 里没有彩色强调色,焦点环就用前景色本身 ——
+   和正文同色,两套主题下对比度都够。 */
+:focus-visible {
+  outline: 2px solid var(--text);
+  outline-offset: 1px;
+}
+
+/*
+ * 按钮的默认身份是「安静」。
+ *
+ * 全应用只留这一份底样式:三个组件的 scoped 样式只在需要**更响**的时候覆盖
+ * (实心、迷你、破坏性),不再各自把底样式抄一遍 —— 抄三遍的结果是改主题时漏掉一处。
+ */
+button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 5px 12px;
+  font-family: inherit;
+  font-size: 13px;
+  line-height: 1.45;
+  color: var(--text);
+  background: var(--raise);
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  white-space: nowrap;
+  cursor: pointer;
+  transition: background 0.12s, border-color 0.12s, color 0.12s;
+}
+
+button:hover:not(:disabled) {
+  background: var(--raise-hover);
+  border-color: var(--border-strong);
+}
+
+button:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+/* 实心 = 界面上最响的一档,只给「主操作」和「当前状态」用。
+   深浅主题下取值相反,所以组件不必关心当前是哪套主题。 */
+button.solid {
+  background: var(--solid);
+  border-color: var(--solid);
+  color: var(--solid-text);
+}
+
+/* 选中态的底色本来就是最响的,再叠一层 hover 只会让人以为点下去会变。
+   写死成和 .solid 一样,把全局那条 hover 盖掉。 */
+button.solid:hover:not(:disabled) {
+  background: var(--solid);
+  border-color: var(--solid);
+}
+
+/* 破坏性操作(取消、清空)是全应用唯一允许带色的按钮 —— 红是语义,不是装饰 */
+button.danger {
+  background: transparent;
+  border-color: var(--danger-border);
+  color: var(--danger-text);
+}
+
+button.danger:hover:not(:disabled) {
+  background: var(--danger-bg);
+  border-color: var(--danger-border);
+}
+
+/* 滚动条。用 border + background-clip 把滑块收窄,不用给每个容器单独指定底色 */
 ::-webkit-scrollbar {
-  width: 10px;
-  height: 10px;
+  width: 11px;
+  height: 11px;
 }
 
 ::-webkit-scrollbar-track {
@@ -72,23 +251,26 @@ input[type='number'] {
 }
 
 ::-webkit-scrollbar-thumb {
-  background: #3a3f47;
-  border-radius: 5px;
-  border: 2px solid var(--panel);
+  background: var(--border-strong);
+  background-clip: content-box;
+  border: 3px solid transparent;
+  border-radius: 6px;
 }
 
 ::-webkit-scrollbar-thumb:hover {
-  background: #4a5059;
+  background: var(--text-faint);
+  /* background 简写会把 background-clip 重置回 border-box,必须重写一遍 */
+  background-clip: content-box;
 }
 
-/* OpenSeadragon 自带控件的配色覆盖。
-   它默认的浅色按钮在深色背景上很突兀。 */
+/* OpenSeadragon 自带控件的配色覆盖。它默认的深色按钮在浅色主题下很刺眼。
+   OSD 是行内样式,只能用 !important 压。 */
 .openseadragon-container .navigator {
   border: 1px solid var(--border) !important;
-  background: #1c1f23 !important;
+  background: var(--stage) !important;
 }
 
 .openseadragon-container .navigator .displayregion {
-  border: 2px solid var(--accent) !important;
-  background: rgba(63, 120, 196, 0.15) !important;
+  border: 2px solid var(--text-dim) !important;
+  background: var(--navigator-veil) !important;
 }
