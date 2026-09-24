@@ -85,8 +85,9 @@ powershell -NoProfile -Command "(Get-Item \"\$env:LOCALAPPDATA\bigImgPin\bigimgp
 版本号变成新版 = 安装真的发生了。配合进程 PID / 启动时间变化,说明自动重启也生效了。
 
 > ⚠️ **别用截图 + 视觉模型验证界面**:本机是 125% DPI 缩放,窗口坐标和硬编码的裁剪区域对不上,
-> 模型还会漏看小字(实测漏报过整个按钮,浪费了很多时间)。先问用户看到了什么,
-> 或者用上面这种客观证据 —— 文件版本号、进程列表、网络连接(`netstat -ano | grep <PID>`)。
+> 模型还会漏看小字(实测漏报过整个按钮,浪费了很多时间)。界面本身怎么验见
+> `.claude/skills/verify/SKILL.md`(CDP 连真客户端);更新链路就靠上面这种客观证据 ——
+> 文件版本号、进程列表、网络连接(`netstat -ano | grep <PID>`)。
 
 ## 五、发布前想清楚
 

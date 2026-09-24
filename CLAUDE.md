@@ -30,31 +30,16 @@ cargo test cache_key_changes_with_slice_params   # 单个测试
 `tauri dev`。Rust 侧的 `#[cfg(test)]` 覆盖在 `src-tauri/src/*.rs` 文件末尾,改到这些
 纯函数时同步改测试。
 
-## 验证界面改动:连客户端的 CDP
+## 验证改动
 
-前端没有测试框架,但界面不是只能靠人肉点。WebView2 支持远程调试:
+机械检查(`vue-tsc` / `cargo test` / `clippy` / `build`)和界面验证的**具体步骤**在
+`.claude/skills/verify/SKILL.md`,那里也记着几个「让坏改动看着像好的」的坑
+(管道吃掉退出码、Vue 重渲染时序、命中检测的坐标系偏移)。
 
-```bash
-npm run dev:web &                    # debug 产物在 dev 模式下就是连它
-WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS="--remote-debugging-port=9222" \
-  ./src-tauri/target/debug/bigimgpin.exe
-curl -s http://127.0.0.1:9222/json/list   # 拿 webSocketDebuggerUrl,之后用 CDP 驱动
-```
-
-CDP 的 `Input.dispatchMouseEvent` / `dispatchKeyEvent` 走 Chromium 完整的输入管线,
-**pointerdown/move/up 都会真触发** —— 拖手柄、Ctrl 点多选、按 Delete 都能验,
-不是「模拟调用一下事件处理函数」。
-
-断言读 DOM,或者读
-`document.querySelector('#app')._vnode.component.setupState`(dev 构建下 setup state
-是暴露的,`regions` / `selectedIds` / `loadPath` 都拿得到)。注意 setupState 里的
-ref 已经自动解包,别再写 `.value`。
-
-**加载图片不用点原生对话框**:`setupState.loadPath('C:/path/to/img.tif')` 直接调。
-但导出用的保存 / 选目录对话框是系统画的,CDP 驱动不了,那一段只能人点。
-
-比截图可靠得多:拿到的是坐标、选区、DOM 结构和磁盘上的文件,不是像素 ——
-而截图在本机 125% DPI 下本来就不可信。
+要记住的只有一条:**界面改动不等于只能靠人点**。WebView2 支持 `--remote-debugging-port`,
+CDP 的鼠标键盘事件走的是 Chromium 完整输入管线,pointerdown/move/up 真触发 ——
+拖手柄、Ctrl 多选、按 Delete 都验得了。断言读 DOM / `setupState` / 磁盘文件,
+比截图可靠(本机 125% DPI,截图本来就不可信)。够不着的只有系统画的对话框和审美判断。
 
 ## 运行前置:libvips
 
