@@ -1,0 +1,2510 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-theme="dark">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>bigImgPin · 实现说明（研发向）</title>
+<style>
+/*
+ * 配色**直接取自 src/styles.css 的令牌**,理由也照抄那边的:
+ * 界面零彩度,颜色只出现在「数据」上 —— 在这份文档里,数据就是代码和流程图。
+ * 于是:框架、边框、正文全中性灰;琥珀(--guide)留给跨边界/重点;蓝(--tile)留给瓦片。
+ * 不引 CDN、不引字体、不引高亮库:双击就能离线打开,和这个项目本身的立场一致。
+ */
+:root,
+:root[data-theme='dark'] {
+  color-scheme: dark;
+  --stage: #17181a;
+  --panel: #1f2022;
+  --raise: #26272a;
+  --border: #37383b;
+  --border-strong: #6a6c72;
+  --text: #dcdde0;
+  --text-dim: #a5a8ae;
+  --text-faint: #878a90;
+  --solid: #dcdde0;
+  --solid-text: #17181a;
+  --guide: #ffd666;
+  --guide-dim: #d9a441;
+  --tile: #6fa8dc;
+  --tile-dim: #4a7fb5;
+  --danger: #e2958f;
+  --ok: #86c78f;
+  --code-bg: #1b1c1e;
+  --font-ui: -apple-system, BlinkMacSystemFont, 'Segoe UI Variable Text', 'Segoe UI',
+    'PingFang SC', 'Microsoft YaHei UI', 'Microsoft YaHei', Roboto, sans-serif;
+  --font-mono: ui-monospace, 'Cascadia Mono', Consolas, SFMono-Regular, Menlo, monospace;
+}
+:root[data-theme='light'] {
+  color-scheme: light;
+  --stage: #e9eaec;
+  --panel: #fafafb;
+  --raise: #ffffff;
+  --border: #d7d9dc;
+  --border-strong: #8b9098;
+  --text: #1c1d1f;
+  --text-dim: #52555c;
+  --text-faint: #656870;
+  --solid: #26282c;
+  --solid-text: #fafafb;
+  --guide: #946414;
+  --guide-dim: #7d5a14;
+  --tile: #2f6ea8;
+  --tile-dim: #4a7fb5;
+  --danger: #a3231b;
+  --ok: #2c6e3a;
+  --code-bg: #f2f3f5;
+}
+
+* { box-sizing: border-box; }
+
+html { scroll-behavior: smooth; }
+
+body {
+  margin: 0;
+  background: var(--stage);
+  color: var(--text);
+  font-family: var(--font-ui);
+  font-size: 15px;
+  line-height: 1.75;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* ------------------------------------------------------------------ 布局 */
+
+.shell {
+  display: grid;
+  grid-template-columns: 272px minmax(0, 1fr);
+  align-items: start;
+  max-width: 1360px;
+  margin: 0 auto;
+  gap: 0 44px;
+}
+
+.side {
+  position: sticky;
+  top: 0;
+  max-height: 100vh;
+  overflow-y: auto;
+  padding: 28px 0 40px 24px;
+  border-right: 1px solid var(--border);
+  font-size: 13px;
+}
+
+.side__title {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--text-faint);
+  margin: 0 0 14px;
+}
+
+.side ol { list-style: none; margin: 0; padding: 0; }
+
+.side a {
+  display: block;
+  padding: 4px 10px 4px 0;
+  color: var(--text-dim);
+  text-decoration: none;
+  border-right: 2px solid transparent;
+  transition: color 0.12s;
+}
+.side a:hover { color: var(--text); }
+.side a .n {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--text-faint);
+  margin-right: 8px;
+}
+.side a.on { color: var(--text); }
+.side a.on .n { color: var(--guide); }
+
+.side__foot {
+  margin-top: 22px;
+  padding-top: 16px;
+  border-top: 1px solid var(--border);
+  color: var(--text-faint);
+  font-size: 12px;
+  line-height: 1.9;
+}
+.side__foot code { font-size: 11px; }
+
+main {
+  padding: 28px 24px 120px 0;
+  min-width: 0;
+}
+
+/* ------------------------------------------------------------------ 排版 */
+
+h1 {
+  font-size: 30px;
+  line-height: 1.3;
+  font-weight: 600;
+  margin: 8px 0 10px;
+  letter-spacing: -0.01em;
+}
+
+.lede { color: var(--text-dim); font-size: 15px; margin: 0 0 20px; max-width: 70ch; }
+
+.meta { display: flex; flex-wrap: wrap; gap: 6px; margin: 0 0 34px; }
+
+.chip {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--text-dim);
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  padding: 2px 7px;
+  background: var(--panel);
+}
+.chip.hot { border-color: var(--guide-dim); color: var(--guide); }
+.chip.tile { border-color: var(--tile-dim); color: var(--tile); }
+
+h2 {
+  font-family: var(--font-mono);
+  font-size: 17px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  margin: 0 0 18px;
+  padding-bottom: 10px;
+  border-bottom: 1px solid var(--border);
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+  scroll-margin-top: 20px;
+}
+h2 .num {
+  font-size: 12px;
+  color: var(--guide);
+  border: 1px solid var(--guide-dim);
+  border-radius: 3px;
+  padding: 0 5px;
+  flex-shrink: 0;
+}
+
+h3 {
+  font-size: 15px;
+  font-weight: 600;
+  margin: 30px 0 10px;
+}
+
+h4 {
+  font-family: var(--font-mono);
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-dim);
+  margin: 22px 0 8px;
+}
+
+section { margin-bottom: 64px; }
+
+p { margin: 0 0 14px; max-width: 78ch; }
+
+ul, ol { max-width: 78ch; padding-left: 22px; }
+li { margin: 5px 0; }
+
+strong { font-weight: 600; color: var(--text); }
+em { font-style: normal; color: var(--guide); }
+
+a { color: var(--tile); }
+
+code {
+  font-family: var(--font-mono);
+  font-size: 12.5px;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  padding: 0.5px 4px;
+  color: var(--text-dim);
+}
+
+/* ------------------------------------------------------------------ 代码块 */
+
+figure { margin: 0 0 20px; }
+
+pre {
+  margin: 0;
+  background: var(--code-bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 14px 16px;
+  overflow-x: auto;
+  font-family: var(--font-mono);
+  font-size: 12.5px;
+  line-height: 1.72;
+  tab-size: 4;
+}
+pre code {
+  background: none;
+  border: 0;
+  padding: 0;
+  font-size: inherit;
+  color: var(--text);
+  white-space: pre;
+}
+figcaption {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--text-faint);
+  margin-bottom: 6px;
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+}
+figcaption b { color: var(--text-dim); font-weight: 500; }
+
+/* 高亮 token:关键字蓝、字符串琥珀、注释暗 —— 只有三种颜色 */
+.tok-k { color: var(--tile); }
+.tok-s { color: var(--guide-dim); }
+.tok-c { color: var(--text-faint); font-style: italic; }
+.tok-n { color: var(--text-dim); }
+.tok-a { color: var(--ok); }
+
+/* ------------------------------------------------------------------ 提示块 */
+
+.note {
+  border-left: 2px solid var(--guide);
+  background: var(--panel);
+  padding: 12px 16px;
+  margin: 0 0 20px;
+  border-radius: 0 4px 4px 0;
+}
+.note__t {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  color: var(--guide);
+  text-transform: uppercase;
+  margin-bottom: 4px;
+}
+.note p:last-child, .note ul:last-child { margin-bottom: 0; }
+
+.note.danger { border-left-color: var(--danger); }
+.note.danger .note__t { color: var(--danger); }
+.note.plain { border-left-color: var(--border-strong); }
+.note.plain .note__t { color: var(--text-faint); }
+
+/* ------------------------------------------------------------------ 表格 */
+
+table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+  margin: 0 0 22px;
+}
+th, td {
+  text-align: left;
+  padding: 8px 12px 8px 0;
+  border-bottom: 1px solid var(--border);
+  vertical-align: top;
+}
+th {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--text-faint);
+  font-weight: 500;
+  white-space: nowrap;
+}
+td:first-child { white-space: nowrap; }
+td code { font-size: 12px; }
+
+/* ------------------------------------------------------------------ 泳道序列图 */
+
+.seq {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--panel);
+  padding: 0 0 18px;
+  margin: 0 0 26px;
+  overflow: hidden;
+}
+.seq__head, .seq__row {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  column-gap: 10px;
+  padding: 0 14px;
+}
+.seq__head {
+  padding-top: 14px;
+  padding-bottom: 10px;
+  border-bottom: 1px solid var(--border);
+  margin-bottom: 4px;
+}
+.seq__lane {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  letter-spacing: 0.06em;
+  color: var(--text-faint);
+  text-transform: uppercase;
+}
+.seq__lane i { font-style: normal; color: var(--text-dim); }
+
+.seq__card {
+  background: var(--raise);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 6px 10px;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--text-dim);
+  font-family: var(--font-mono);
+  overflow-wrap: anywhere;
+}
+.seq__card.hot { border-color: var(--guide-dim); color: var(--guide); }
+.seq__card.tile { border-color: var(--tile-dim); color: var(--tile); }
+
+/* 箭头行:一条线 + 一个箭头;方向由 --d 决定哪头有箭头 */
+.seq__arrow {
+  position: relative;
+  height: 30px;
+  margin: 0 14px;
+}
+.seq__arrow::before {
+  content: '';
+  position: absolute;
+  top: 15px;
+  height: 1px;
+  background: var(--border-strong);
+  left: var(--x1, 0%);
+  right: var(--x2, 0%);
+}
+.seq__arrow::after {
+  content: '';
+  position: absolute;
+  top: 11px;
+  width: 0;
+  height: 0;
+  border-top: 5px solid transparent;
+  border-bottom: 5px solid transparent;
+}
+.seq__arrow[data-dir='r']::after {
+  border-left: 7px solid var(--border-strong);
+  right: var(--x2, 0%);
+}
+.seq__arrow[data-dir='l']::after {
+  border-right: 7px solid var(--border-strong);
+  left: var(--x1, 0%);
+}
+/* 标签放在线的**中点**上,而不是容器的中点上:箭头只跨两三条泳道时,
+   容器中点会落在空泳道里,标签就飘在线外面了。
+   线的中点 = 50% + (x1 - x2) / 2 */
+.seq__arrow span {
+  position: absolute;
+  top: 3px;
+  left: calc(50% + (var(--x1, 0%) - var(--x2, 0%)) / 2);
+  transform: translateX(-50%);
+  background: var(--panel);
+  padding: 0 8px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--text-faint);
+  white-space: nowrap;
+}
+.seq__arrow.hot span { color: var(--guide); }
+.seq__foot {
+  padding: 4px 14px 0;
+  font-size: 12px;
+  color: var(--text-dim);
+}
+
+/* ------------------------------------------------------------------ 金字塔可视化 */
+
+.builder {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--panel);
+  padding: 16px 18px 6px;
+  margin: 0 0 22px;
+}
+.builder__bar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 18px;
+  align-items: center;
+  padding-bottom: 14px;
+  border-bottom: 1px solid var(--border);
+  margin-bottom: 16px;
+}
+.builder__bar label {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--text-faint);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.builder__bar input, .builder__bar select {
+  width: 92px;
+  background: var(--code-bg);
+  border: 1px solid var(--border-strong);
+  border-radius: 4px;
+  color: var(--text);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  padding: 4px 6px;
+}
+.builder__bar select { width: 108px; }
+.builder__sum {
+  margin-left: auto;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--text-dim);
+}
+.builder__sum b { color: var(--guide); font-weight: 600; }
+
+.levels { display: flex; flex-direction: column; gap: 2px; padding-bottom: 8px; }
+.lv {
+  display: grid;
+  grid-template-columns: 74px 170px 112px minmax(0, 1fr);
+  align-items: center;
+  gap: 12px;
+  padding: 4px 0;
+}
+.lv__n {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--text-faint);
+}
+.lv__px { font-family: var(--font-mono); font-size: 12px; color: var(--text-dim); }
+.lv__count { font-family: var(--font-mono); font-size: 12px; color: var(--text-dim); }
+.lv__canvas { line-height: 0; }
+.lv--full .lv__n, .lv--full .lv__count { color: var(--guide); }
+.lv--tiny { opacity: 0.62; }
+canvas { image-rendering: pixelated; }
+
+/* ------------------------------------------------------------------ 杂项 */
+
+.cols2 {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  gap: 0 26px;
+}
+
+.card {
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--panel);
+  padding: 14px 16px 2px;
+  margin-bottom: 16px;
+}
+.card h4 { margin-top: 0; }
+
+.steps { counter-reset: s; }
+
+.hop {
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--panel);
+  margin: 0 0 22px;
+  overflow: hidden;
+}
+.hop__h {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  padding: 11px 16px;
+  border-bottom: 1px solid var(--border);
+  flex-wrap: wrap;
+}
+.hop__n {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--solid-text);
+  background: var(--solid);
+  border-radius: 3px;
+  padding: 1px 6px;
+  flex-shrink: 0;
+}
+.hop__t { font-weight: 600; font-size: 14px; }
+.hop__where {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--text-faint);
+  margin-left: auto;
+  white-space: nowrap;
+}
+.hop__b { padding: 14px 16px 0; }
+.hop__b > p:last-child { margin-bottom: 14px; }
+.hop pre { font-size: 12px; }
+
+.diagram {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--panel);
+  padding: 18px;
+  margin: 0 0 24px;
+  overflow-x: auto;
+}
+
+.toggle {
+  position: fixed;
+  right: 18px;
+  bottom: 18px;
+  z-index: 50;
+  background: var(--panel);
+  border: 1px solid var(--border-strong);
+  color: var(--text-dim);
+  border-radius: 999px;
+  padding: 7px 15px;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  cursor: pointer;
+}
+.toggle:hover { color: var(--text); border-color: var(--solid); }
+
+.kv { font-family: var(--font-mono); font-size: 12px; }
+.dim { color: var(--text-faint); }
+.hot { color: var(--guide); }
+.tilec { color: var(--tile); }
+
+hr.soft {
+  border: 0;
+  border-top: 1px dashed var(--border);
+  margin: 30px 0;
+}
+
+@media (max-width: 1000px) {
+  .shell { grid-template-columns: 1fr; }
+  .side { position: static; max-height: none; border-right: 0; border-bottom: 1px solid var(--border); padding: 18px 20px; }
+  main { padding: 22px 20px 100px; }
+  .lv { grid-template-columns: 60px 1fr; }
+  .lv__canvas { grid-column: 2; }
+}
+</style>
+</head>
+<body>
+
+<div class="shell">
+  <nav class="side">
+    <p class="side__title">目录</p>
+    <ol id="toc">
+      <li><a href="#s1"><span class="n">01</span>谁在跑：四个执行体</a></li>
+      <li><a href="#s2"><span class="n">02</span>瓦片金字塔是什么</a></li>
+      <li><a href="#s3"><span class="n">03</span>全链路：点一下到出瓦片</a></li>
+      <li><a href="#s4"><span class="n">04</span>缓存键与原子落盘</a></li>
+      <li><a href="#s5"><span class="n">05</span>瓦片怎么送到前端</a></li>
+      <li><a href="#s6"><span class="n">06</span>坐标：唯一出口</a></li>
+      <li><a href="#s7"><span class="n">07</span>标注：状态、画布、落盘</a></li>
+      <li><a href="#s8"><span class="n">08</span>导出：语义留在前端</a></li>
+      <li><a href="#s9"><span class="n">09</span>看着像 bug 的故意设计</a></li>
+      <li><a href="#s10"><span class="n">10</span>速查与验证</a></li>
+    </ol>
+    <div class="side__foot">
+      代码块标题里的 <code>文件:行号</code> 对应仓库当前版本。<br>
+      文中所有路径都是本机实测跑出来的。
+    </div>
+  </nav>
+
+  <main>
+    <h1>bigImgPin 实现说明</h1>
+    <p class="lede">
+      从「点一下打开图片」到 <code>vips.exe</code> 在磁盘上切出一棵瓦片金字塔,再到浏览器把瓦片贴回屏幕 ——
+      这份文档把这条链路上的每一跳、每一跳的代码、以及代码里那些「不这么写就会出事」的地方摊开。
+    </p>
+    <div class="meta">
+      <span class="chip">Tauri 2</span>
+      <span class="chip">Rust 后端</span>
+      <span class="chip">Vue 3 + TS</span>
+      <span class="chip">OpenSeadragon 6</span>
+      <span class="chip hot">libvips：外部二进制，不是链接进来的库</span>
+      <span class="chip tile">v0.2.1</span>
+    </div>
+
+    <!-- ============================================================ 01 -->
+    <section id="s1">
+      <h2><span class="num">01</span>谁在跑：四个执行体</h2>
+
+      <p>
+        这是最容易带着 Node 直觉读错的地方。Node 里「处理一张图」是 <code>require('sharp')</code>,
+        一个进程、一次调用、一个返回值。这里不是:同一时刻有 <strong>四个执行体</strong>,它们之间靠
+        管道、文件和 HTTP 说话。
+      </p>
+
+      <figure>
+        <figcaption><b>进程与边界</b><span>宿主进程 = 你的 exe（Rust）</span></figcaption>
+        <pre data-plain><code>┌─ bigimgpin.exe ─────────────────────────────────────────────────┐
+│                                                                  │
+│   ┌── WebView2 子进程 ──────────┐      ┌── Rust 主线程 ─────────┐  │
+│   │  Vue 3 应用                 │      │  tauri::Builder        │  │
+│   │  ├─ OpenSeadragon (canvas)  │◄────►│  invoke_handler![]     │  │
+│   │  └─ 自绘 &lt;svg&gt; 叠加层        │ IPC  │  自定义协议 bigimgpin  │  │
+│   └─────────────────────────────┘      └───────────┬────────────┘  │
+│                                                     │ spawn         │
+└─────────────────────────────────────────────────────┼──────────────┘
+                                                      ▼
+                                        ┌── vips.exe（子进程）──┐
+                                        │  dzsave / extract_area │
+                                        └───────────┬───────────┘
+                                                    │ 写
+                                                    ▼
+                                %LOCALAPPDATA%\com.liuliyi.bigimgpin\tiles\
+                                       &lt;cache_key&gt;\image.dzi + image_files\</code></pre>
+      </figure>
+
+      <div class="note">
+        <div class="note__t">关键前提</div>
+        <p>
+          <strong>libvips 是外部二进制,不是链接进来的库。</strong> Rust 侧没有 <code>libvips-sys</code>,
+          它是 <code>std::process::Command</code> 起了一个 <code>vips.exe</code>,读它的 stdout,看它的退出码
+          （<code>src-tauri/src/vips.rs</code> 文件头）。
+          代价是要自己解析文本输出;换来的是 macOS 用 brew 的、Windows 用随包捆绑的,
+          Rust 侧不必处理两套构建系统。
+        </p>
+      </div>
+
+      <h3>给 Node 背景的对照表</h3>
+      <table>
+        <thead>
+          <tr><th>这里的东西</th><th>Node / 浏览器里对应什么</th><th>差别在哪</th></tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><code>#[tauri::command]</code> + <code>invoke('x')</code></td>
+            <td>一个 POST <code>/x</code> 路由</td>
+            <td>不走网络栈,是进程内 IPC;参数/返回值靠 serde 自动 JSON 化</td>
+          </tr>
+          <tr>
+            <td><code>tauri::generate_handler![…]</code></td>
+            <td>Express 的 <code>app.use()</code> 路由表</td>
+            <td>漏注册 = 前端 <code>invoke</code> 直接 reject,没有 404 日志</td>
+          </tr>
+          <tr>
+            <td><code>app.emit("tile-progress", payload)</code></td>
+            <td>WebSocket / SSE 推送</td>
+            <td>广播式,前端 <code>listen()</code> 订阅;发早了没人收（事件会丢）</td>
+          </tr>
+          <tr>
+            <td>自定义协议 <code>bigimgpin://</code></td>
+            <td>一个只服务缓存目录的静态文件服务器</td>
+            <td>图片字节<strong>不</strong>走 IPC —— 见 §5</td>
+          </tr>
+          <tr>
+            <td>async command + <code>spawn_blocking</code></td>
+            <td>重活丢给 <code>worker_threads</code>,别堵事件循环</td>
+            <td>同步命令会跑在 UI 主线程,几分钟的切片直接冻界面</td>
+          </tr>
+          <tr>
+            <td><code>#[serde(rename_all = "camelCase")]</code></td>
+            <td>DTO 层的字段名转换</td>
+            <td>Rust <code>tile_size</code> ↔ TS <code>tileSize</code>,改一边必须改另一边</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <h3>代码分布</h3>
+      <div class="cols2">
+        <div>
+          <h4>前端 src/</h4>
+          <table>
+            <tbody>
+              <tr><td><code>api/tauri.ts</code></td><td class="dim">所有 invoke 与事件监听。组件只 import 它</td></tr>
+              <tr><td><code>App.vue</code></td><td class="dim">状态与交互编排（900 行,但没有算法）</td></tr>
+              <tr><td><code>state/useAnnotations.ts</code></td><td class="dim">框 / 辅助线 / 撤销栈</td></tr>
+              <tr><td><code>state/slicePrefs.ts</code></td><td class="dim">切片参数（localStorage）</td></tr>
+              <tr><td><code>osd/useViewer.ts</code></td><td class="dim">OpenSeadragon 实例与配置</td></tr>
+              <tr><td><code>osd/coords.ts</code></td><td class="dim">坐标换算的唯一出口</td></tr>
+              <tr><td><code>osd/useAnnotationSvg.ts</code></td><td class="dim">叠加层：网格/线/框/手柄</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <div>
+          <h4>后端 src-tauri/src/</h4>
+          <table>
+            <tbody>
+              <tr><td><code>commands.rs</code></td><td class="dim">切片、缓存、进度、取消</td></tr>
+              <tr><td><code>vips.rs</code></td><td class="dim">定位 vips、拼命令行、解析输出</td></tr>
+              <tr><td><code>tiles_protocol.rs</code></td><td class="dim">自定义协议 + URL 前缀唯一收敛点</td></tr>
+              <tr><td><code>annotations.rs</code></td><td class="dim">标注文件读写（源图旁边的 sidecar）</td></tr>
+              <tr><td><code>export.rs</code></td><td class="dim">CSV 与裁剪导出</td></tr>
+              <tr><td><code>lib.rs</code></td><td class="dim">组装：注册插件、协议、命令</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+
+    <!-- ============================================================ 02 -->
+    <section id="s2">
+      <h2><span class="num">02</span>瓦片金字塔是什么</h2>
+
+      <p>
+        一张 41041 × 49841 的图约 20.5 亿像素,按 8 位 RGB 展开是 <strong>6 GB</strong> ——
+        还没算解码器的中间缓冲。所以大图不能「打开」,只能<strong>按视野分块、按需加载</strong>。
+        金字塔就是这件事的数据结构:同一张图预先降采样出一串越来越小的版本,每一级再切成固定大小的方块。
+        放大看细节时取最深那级的几块,缩到全图时取最浅那级的一块。
+      </p>
+
+      <h3>它落在磁盘上长这样</h3>
+      <p>
+        <code>vips dzsave</code> 产出的是标准 <strong>DZI</strong>（Deep Zoom Image）—— 微软定的格式,
+        OpenSeadragon 原生会读。下面这份是本机缓存里真实的一份（源图 3000 × 2000）:
+      </p>
+
+      <figure>
+        <figcaption><b>image.dzi</b><span>整个金字塔的说明书,只有 8 行</span></figcaption>
+        <pre><code>&lt;?xml version="1.0" encoding="UTF-8"?&gt;
+&lt;Image xmlns="http://schemas.microsoft.com/deepzoom/2008"
+  Format="webp"
+  Overlap="1"
+  TileSize="1024"
+  &gt;
+  &lt;Size
+    Height="2000"
+    Width="3000"
+  /&gt;
+&lt;/Image&gt;</code></pre>
+      </figure>
+
+      <figure>
+        <figcaption><b>image_files/</b><span>同一份缓存的实际目录</span></figcaption>
+        <pre data-plain><code>image_files/
+  0/0_0.webp                 ← 1 × 1        （最小的一级）
+  1/0_0.webp
+  …
+  11/0_0.webp  11/1_0.webp   ← 2 × 1
+  12/0_0.webp  12/0_1.webp   ← 3 × 2 = 6 张,全分辨率 3000 × 2000
+     12/1_0.webp  12/1_1.webp
+     12/2_0.webp  12/2_1.webp
+  vips-properties.xml        ← vips 写的元数据,不是瓦片（数文件时会多出这一个）</code></pre>
+      </figure>
+
+      <div class="note">
+        <div class="note__t">反直觉的地方</div>
+        <p>
+          <strong>目录号 0 是最小的一级,号越大越清晰。</strong>
+          <code>12/</code> 才是全分辨率,<code>0/</code> 只有 1 个像素。
+          OpenSeadragon 那边的 <code>level</code> 用的是同一套编号（<code>getLevelScale(level) = 1 / 2^(maxLevel - level)</code>,
+          level = maxLevel 时 scale 就是 1),所以前端拿到的 level 号可以直接当目录名拼 URL ——
+          见 §5 的 <code>getTileUrl</code>。
+        </p>
+      </div>
+
+      <h3>亲手切一遍</h3>
+      <p>
+        下面这个金字塔是<strong>按仓库里那段公式现算的</strong>（<code>vips.rs::expected_tile_count</code>:
+        每一级尺寸是上一级的一半、向上取整,一直降到 1 × 1）。改宽高或瓦片尺寸,看它怎么变:
+      </p>
+
+      <div class="builder">
+        <div class="builder__bar">
+          <label>宽 <input id="bw" type="number" value="41041" min="1" max="2000000" step="1"></label>
+          <label>高 <input id="bh" type="number" value="49841" min="1" max="2000000" step="1"></label>
+          <label>瓦片
+            <select id="bt">
+              <option value="256">256（DZI 惯例）</option>
+              <option value="512">512</option>
+              <option value="1024" selected>1024（本项目默认）</option>
+              <option value="2048">2048</option>
+            </select>
+          </label>
+          <div class="builder__sum" id="bsum"></div>
+        </div>
+        <div class="levels" id="levels"></div>
+      </div>
+
+      <p class="dim" style="font-size:13px">
+        每一行是一个目录（磁盘顺序,从 <code>0/</code> 开始）。方块 = 一张瓦片,按真实比例排布。
+        最后一行就是全分辨率那层,打开图时看到的就是它的局部。
+      </p>
+
+      <h3>三个数字里的取舍</h3>
+
+      <h4>瓦片为什么是 1024,而不是 DZI 惯用的 256</h4>
+      <p>
+        瓦片越大,压缩算法在单张瓦片内能匹配到的重复图案越多,总体积越小 —— 实测 2048 比 512 省约 40%。
+        但解码后的内存是平方增长的:<strong>1024 瓦片解码后一张 4 MB</strong>。
+        OpenSeadragon 默认缓存 200 张且<strong>不按内存预算</strong>,默认值会吃掉 800 MB。
+        所以最终定 1024（<code>commands.rs</code> 顶部）,并把 OSD 缓存压到 80 张:
+        1080p 视口、1024 瓦片时实际只用约 9 张,加倍留余量足够。
+      </p>
+
+      <h4>为什么默认 WebP 无损,不是 JPEG 也不是 PNG</h4>
+      <ul>
+        <li>比 PNG 小约 <strong>35%</strong>,而逐像素相减最大差值为 <strong>0</strong>（真无损）。</li>
+        <li>
+          <strong>不用 JPEG:</strong> 目标图是边缘锐利的版图类图像,JPEG 会在每条边产生振铃伪影,
+          而那可能被当成真实结构读出来。对一个用来「看结构」的工具,这条不能接受。
+        </li>
+        <li>PNG 用默认压缩档:实测 <code>compression=9</code> 只省 8%,却慢数倍。</li>
+      </ul>
+
+      <figure>
+        <figcaption><b>src-tauri/src/vips.rs:272-295</b><span>格式决定三处字符串</span></figcaption>
+        <pre><code>impl TileFormat {
+    /// 传给 `--suffix` 的值。方括号里是保存选项。
+    pub fn suffix_arg(self, quality: u32) -&gt; String {
+        match self {
+            TileFormat::Jpeg =&gt; format!(".jpg[Q={quality}]"),
+            TileFormat::Png =&gt; ".png".to_string(),
+            TileFormat::Webp =&gt; ".webp[lossless]".to_string(),
+        }
+    }
+
+    /// 瓦片扩展名。DZI 描述符的 Format 字段和 OpenSeadragon 的 fileFormat 都用它。
+    ///
+    /// 注意 vips 只会把格式名写进描述符,不会把方括号里的选项写进去 ——
+    /// 已经实测确认过这一点,否则前端会拼出 `.webp[lossless]` 这种不存在的文件名。
+    pub fn extension(self) -&gt; &amp;'static str {
+        match self {
+            TileFormat::Jpeg =&gt; "jpg",
+            TileFormat::Png =&gt; "png",
+            TileFormat::Webp =&gt; "webp",
+        }
+    }
+}</code></pre>
+      </figure>
+      <p class="dim" style="font-size:13px">
+        有测试守着 <code>extension()</code> 不许出现方括号（<code>extensions_have_no_option_brackets</code>）——
+        它拼进 URL,一旦带上选项,前端请求的就是一个不存在的文件名。
+      </p>
+    </section>
+
+    <!-- ============================================================ 03 -->
+    <section id="s3">
+      <h2><span class="num">03</span>全链路：点一下到出瓦片</h2>
+
+      <p>先给全景,再逐跳看代码。竖着读:<strong>一条线是一次调用,卡片是「在谁那里发生了什么」。</strong></p>
+
+      <div class="seq">
+        <div class="seq__head">
+          <div class="seq__lane"><i>①</i> 前端 WebView</div>
+          <div class="seq__lane"><i>②</i> IPC 边界</div>
+          <div class="seq__lane"><i>③</i> Rust 后端</div>
+          <div class="seq__lane"><i>④</i> vips.exe · 磁盘</div>
+        </div>
+
+        <div class="seq__row" style="padding-top:6px">
+          <div class="seq__card">① 用户点「打开图片」</div>
+        </div>
+        <div class="seq__arrow" data-dir="r" style="--x1:0%;--x2:50%"><span>invoke('pick_image')</span></div>
+        <div class="seq__row">
+          <div></div>
+          <div></div>
+          <div class="seq__card">② 打开系统文件对话框</div>
+        </div>
+        <div class="seq__arrow" data-dir="r" style="--x1:50%;--x2:0%"><span>用户在系统对话框里选文件</span></div>
+        <div class="seq__row">
+          <div></div>
+          <div></div>
+          <div></div>
+          <div class="seq__card">③ 返回绝对路径</div>
+        </div>
+        <div class="seq__arrow" data-dir="l" style="--x1:0%;--x2:0%"><span>path（取消则 null）</span></div>
+
+        <div class="seq__row">
+          <div class="seq__card">④ loadPath(path)</div>
+        </div>
+        <div class="seq__arrow hot" data-dir="r" style="--x1:0%;--x2:50%">
+          <span>invoke('prepare_image', { path, params }) ← 主链路</span>
+        </div>
+
+        <div class="seq__row">
+          <div></div>
+          <div></div>
+          <div class="seq__card hot">⑤ 算 cache_key,查缓存</div>
+        </div>
+        <div class="seq__arrow" data-dir="r" style="--x1:50%;--x2:0%"><span>tiles/&lt;hash&gt;/image.dzi</span></div>
+        <div class="seq__row">
+          <div></div>
+          <div></div>
+          <div></div>
+          <div class="seq__card">命中 → 秒回（跳到 ⑭）</div>
+        </div>
+        <div class="seq__arrow" data-dir="l" style="--x1:50%;--x2:0%"><span>未命中，继续往下</span></div>
+        <div class="seq__row">
+          <div></div>
+          <div></div>
+          <div class="seq__card">⑥ probe_image: vipsheader 读文件头拿宽高</div>
+        </div>
+        <div class="seq__arrow hot" data-dir="r" style="--x1:50%;--x2:0%">
+          <span>spawn vips dzsave …（新起一个进程）</span>
+        </div>
+        <div class="seq__row">
+          <div></div>
+          <div></div>
+          <div></div>
+          <div class="seq__card hot">⑦ 逐级降采样 + 切瓦片</div>
+        </div>
+        <div class="seq__arrow" data-dir="r" style="--x1:50%;--x2:0%"><span>写 .tmp-&lt;id&gt;-&lt;pid&gt;/</span></div>
+        <div class="seq__row">
+          <div></div>
+          <div></div>
+          <div></div>
+          <div class="seq__card">⑧ image_files/&lt;级&gt;/&lt;列&gt;_&lt;行&gt;.webp</div>
+        </div>
+        <div class="seq__arrow" data-dir="l" style="--x1:50%;--x2:0%">
+          <span>stdout: vips temp-3: 45% complete</span>
+        </div>
+        <div class="seq__row">
+          <div></div>
+          <div></div>
+          <div class="seq__card">⑨ 解析百分比 + 数文件兜底</div>
+        </div>
+        <div class="seq__arrow" data-dir="l" style="--x1:0%;--x2:50%">
+          <span>事件 tile-progress { percent }</span>
+        </div>
+        <div class="seq__row">
+          <div class="seq__card">⑩ 进度条（取两条来源的较大值）</div>
+        </div>
+        <div class="seq__arrow" data-dir="r" style="--x1:0%;--x2:50%"><span>vips 退出码 0</span></div>
+        <div class="seq__row">
+          <div></div>
+          <div></div>
+          <div class="seq__card">⑪ .tmp-… → &lt;hash&gt;/ 原子改名</div>
+        </div>
+        <div class="seq__arrow" data-dir="l" style="--x1:0%;--x2:50%">
+          <span>返回 PreparedImage（宽高 + tilesUrl + 格式）</span>
+        </div>
+
+        <div class="seq__row">
+          <div class="seq__card tile">⑫ new DziTileSource({ width, tileSize, tilesUrl, fileFormat })</div>
+        </div>
+        <div class="seq__arrow tile" data-dir="r" style="--x1:0%;--x2:0%">
+          <span>OSD 按视野算需要哪几张 → GET 瓦片 URL</span>
+        </div>
+        <div class="seq__row">
+          <div></div>
+          <div></div>
+          <div class="seq__card tile">⑬ 自定义协议读盘并回字节</div>
+          <div class="seq__card tile">tiles/&lt;hash&gt;/image_files/12/2_1.webp</div>
+        </div>
+        <div class="seq__arrow tile" data-dir="l" style="--x1:0%;--x2:0%">
+          <span>200 OK · image/webp · cache-control: immutable</span>
+        </div>
+        <div class="seq__row">
+          <div class="seq__card tile">⑭ 贴到 canvas 上（叠加层是另一张 SVG）</div>
+        </div>
+        <div class="seq__foot">灰色 = 冷路径（只在第一次打开这张图时走）。热路径只有 ①④⑫⑬⑭。</div>
+      </div>
+
+      <h3>逐跳代码</h3>
+
+      <div class="hop">
+        <div class="hop__h"><span class="hop__n">1</span><span class="hop__t">用户点「打开图片」</span><span class="hop__where">App.vue:690</span></div>
+        <div class="hop__b">
+          <p>按钮在 <code>ToolBar.vue</code>,事件冒到 App。App 只做编排:调 api、接结果、把错误放进横幅。</p>
+          <figure>
+            <figcaption><b>src/App.vue</b><span>openImage</span></figcaption>
+            <pre><code>async function openImage() {
+  errorMessage.value = null
+  try {
+    const path = await api.pickImage()
+    if (!path) return          // 用户取消:不是错误,什么都不说
+    await loadPath(path)
+  } catch (error) {
+    errorMessage.value = String(error)
+  }
+}</code></pre>
+          </figure>
+        </div>
+      </div>
+
+      <div class="hop">
+        <div class="hop__h"><span class="hop__n">2</span><span class="hop__t">invoke —— 唯一的跨进程出口</span><span class="hop__where">src/api/tauri.ts</span></div>
+        <div class="hop__b">
+          <p>
+            <strong>组件从不直接 import <code>invoke</code>。</strong> 所有命令与事件都封在这一个文件里,
+            于是「前端能叫后端做什么」是一份可以一眼读完的清单,参数名写错也只会在这一个地方错。
+          </p>
+          <figure>
+            <figcaption><b>src/api/tauri.ts:27-37</b><span>返回值类型就是 Rust 侧的类型</span></figcaption>
+            <pre><code>/** 打开文件对话框。返回绝对路径,取消则返回 null。 */
+export function pickImage(): Promise&lt;string | null&gt; {
+  return invoke&lt;string | null&gt;('pick_image')
+}
+
+/** 命中缓存则秒回,否则切片(可能几分钟)。 */
+export function prepareImage(
+  path: string,
+  params?: SliceParams,
+): Promise&lt;PreparedImage&gt; {
+  return invoke&lt;PreparedImage&gt;('prepare_image', { path, params })
+}</code></pre>
+          </figure>
+          <div class="note plain">
+            <div class="note__t">命名约定</div>
+            <p>
+              <code>invoke</code> 的第二个参数里,键名必须和 Rust 函数的参数名对上（<code>path</code>、<code>params</code>）,
+              而返回对象里的字段走 serde 的 <code>camelCase</code>,所以 Rust 写 <code>tile_size</code>、TS 收 <code>tileSize</code>。
+              <strong>Rust 的 <code>Result::Err</code> 在 JS 侧表现为 Promise reject</strong> —— 所以 <code>vipsInfo()</code>
+              成功就代表 vips 可用,返回类型里没有 <code>available</code> 字段。
+            </p>
+          </div>
+        </div>
+      </div>
+
+      <div class="hop">
+        <div class="hop__h"><span class="hop__n">3</span><span class="hop__t">Rust 弹系统对话框</span><span class="hop__where">commands.rs:117</span></div>
+        <div class="hop__b">
+          <p>放在 Rust 侧的唯一原因:这里拿到的直接是<strong>绝对路径</strong>,前端不用去猜、也不用处理路径编码。</p>
+          <figure>
+            <figcaption><b>src-tauri/src/commands.rs</b><span>pick_image</span></figcaption>
+            <pre><code>/// 打开文件选择对话框。放在 Rust 侧可以直接拿到绝对路径。
+#[tauri::command]
+pub async fn pick_image(app: AppHandle) -&gt; Result&lt;Option&lt;String&gt;, String&gt; {
+    use tauri_plugin_dialog::DialogExt;
+
+    let picked = app
+        .dialog()
+        .file()
+        .add_filter(
+            "图片",
+            &amp;["jpg", "jpeg", "png", "tif", "tiff", "bmp", "webp", "vips"],
+        )
+        .blocking_pick_file();
+
+    Ok(picked
+        .and_then(|f| f.into_path().ok())
+        .map(|p| p.display().to_string()))
+}</code></pre>
+          </figure>
+          <p class="dim" style="font-size:13px">
+            <code>async fn</code> 不只是风格问题 —— 同步命令跑在 UI 主线程,一个阻塞几百毫秒的对话框就够界面卡一下。
+          </p>
+        </div>
+      </div>
+
+      <div class="hop">
+        <div class="hop__h"><span class="hop__n">4</span><span class="hop__t">loadPath：一次「打开」的全部前端动作</span><span class="hop__where">App.vue:713</span></div>
+        <div class="hop__b">
+          <p>这个函数是前端这一侧的主干。注意中间那段<strong>刻意的 await 顺序</strong>,它有硬性理由（见 §7 的「半新半旧」）。</p>
+          <figure>
+            <figcaption><b>src/App.vue</b><span>loadPath</span></figcaption>
+            <pre><code>async function loadPath(path: string, restoring = false) {
+  slicing.value = { percent: 0, tilesDone: 0, tilesTotal: 0 }
+  try {
+    const prepared = await api.prepareImage(path, sliceParams())
+    // 标注先取回来(异步),再和图像一起换上去(同步,中间不插 await)。
+    // 读不到就是空的,旧图的框不会被带过来 —— 它们对新图的坐标没有意义。
+    const loaded = await fetchAnnotations(prepared.sourcePath)
+    image.value = prepared
+    applyAnnotations(loaded, prepared)
+    viewerApi.load(prepared)
+    localStorage.setItem(LAST_IMAGE_KEY, prepared.sourcePath)
+  } catch (error) {
+    if (restoring) {
+      // 恢复失败就把路径忘掉,免得每次启动都报一遍同样的错
+      localStorage.removeItem(LAST_IMAGE_KEY)
+      notice.value = `上次打开的图没能自动打开:${String(error)}`
+    } else {
+      errorMessage.value = String(error)
+    }
+  } finally {
+    slicing.value = null
+  }
+}</code></pre>
+          </figure>
+          <div class="note plain">
+            <div class="note__t">顺带一提</div>
+            <p>
+              <code>LAST_IMAGE_KEY</code> 存的是<strong>源图路径</strong>而不是瓦片目录:瓦片是缓存、随时会被清掉,
+              路径是「我想看的是哪张图」,两者生命周期不一样。启动时若命中缓存,这次打开是秒开的。
+            </p>
+          </div>
+        </div>
+      </div>
+
+      <div class="hop">
+        <div class="hop__h"><span class="hop__n">5</span><span class="hop__t">prepare_image：先算缓存键，再说切不切</span><span class="hop__where">commands.rs:139</span></div>
+        <div class="hop__b">
+          <p>
+            命令一进来就干三件事:解析参数 → 读文件元信息（大小 + mtime）→ 算 <code>cache_key</code>。
+            这个 key 就是目录名,<strong>切片参数也进 hash</strong>,理由见 §4。
+          </p>
+          <figure>
+            <figcaption><b>src-tauri/src/commands.rs</b><span>命中判定在前,切片在后</span></figcaption>
+            <pre><code>#[tauri::command]
+pub async fn prepare_image(
+    app: AppHandle,
+    path: String,
+    params: Option&lt;SliceParams&gt;,
+) -&gt; Result&lt;PreparedImage, String&gt; {
+    let opts = params.unwrap_or_default().resolve();
+
+    let source = PathBuf::from(&amp;path);
+    let meta = std::fs::metadata(&amp;source).map_err(|e| format!("无法读取文件 {path}: {e}"))?;
+    let modified = meta.modified().ok()
+        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+
+    let id = cache_key(&amp;path, meta.len(), modified, &amp;opts);
+
+    let cache_root = cache_root(&amp;app)?;
+    let final_dir = cache_root.join(&amp;id);
+    let dzi_path = final_dir.join("image.dzi");
+
+    // ---- 命中缓存 ----
+    // 必须同时确认 .dzi 和瓦片目录都在。只查 .dzi 会命中被中断留下的残缺缓存。
+    if dzi_path.is_file() &amp;&amp; final_dir.join("image_files").is_dir() {
+        let image_meta = vips::probe_image(&amp;vips::resolve_vips(&amp;app)?, &amp;source)?;
+        return Ok(build_result(id, path, image_meta, opts, true, dir_size(&amp;final_dir)));
+    }</code></pre>
+          </figure>
+          <div class="note">
+            <div class="note__t">两个细节</div>
+            <ul>
+              <li>
+                命中缓存这条路径<strong>仍然要起一次 <code>vipsheader</code></strong>（<code>probe_image</code>）:
+                前端需要真实的宽高去构造 <code>DziTileSource</code>,而这个信息只存在源图里。
+                好在这只是读文件头、不解码图像,几十毫秒。
+              </li>
+              <li>
+                Rust 的 <code>map_err(|e| …)</code> 把 <code>io::Error</code> 换成人类可读的中文串 ——
+                这个串会一路原样出现在界面横幅里。<code>Result&lt;T, String&gt;</code> 是 Tauri 命令的常见形态。
+              </li>
+            </ul>
+          </div>
+        </div>
+      </div>
+
+      <div class="hop">
+        <div class="hop__h"><span class="hop__n">6</span><span class="hop__t">探图：不解码图像，只读文件头</span><span class="hop__where">vips.rs:119 · vips::probe_image</span></div>
+        <div class="hop__b">
+          <p>
+            这一跳就是 <code>vips::probe_image</code>（<code>src-tauri/src/vips.rs:119</code>）:
+            起一次 <code>vipsheader -a &lt;图&gt;</code>,把它的输出按「<code>key: value</code> 一行一个」读出来。
+            解析时要求行<strong>以 key 开头</strong>,不能只是包含 —— 第一行是路径,而路径里完全可能含 "width"。
+          </p>
+          <figure>
+            <figcaption><b>src-tauri/src/vips.rs</b><span>probe_image 的核心几行</span></figcaption>
+            <pre><code>let text = String::from_utf8_lossy(&amp;out.stdout);
+// 按 `key: value` 取字段。`-a` 的第一行是 `&lt;路径&gt;: 200x100 ushort, 3 bands…`,
+// 路径里完全可能含 "width" 之类的字样,所以要求行**以** key 开头,不能只是包含。
+let field = |key: &amp;str| -&gt; Option&lt;String&gt; {
+    text.lines()
+        .find_map(|line| line.strip_prefix(key)?.strip_prefix(':'))
+        .map(|v| v.trim().to_string())
+};
+
+Ok(ImageMeta {
+    width: field("width").and_then(|v| v.parse().ok())
+        .ok_or_else(|| format!("无法解析 width:\n{text}"))?,
+    height: field("height").and_then(|v| v.parse().ok())
+        .ok_or_else(|| format!("无法解析 height:\n{text}"))?,
+    bands: field("bands").and_then(|v| v.parse().ok()).unwrap_or(3),
+    format: field("format").unwrap_or_else(|| "uchar".into()),
+})</code></pre>
+          </figure>
+          <p class="dim" style="font-size:13px">
+            这里的 <code>format</code> 字段（<code>uchar</code> / <code>ushort</code> / <code>float</code>…）
+            后面导出裁剪图时会用到:它决定用什么容器存 —— 见 §8。
+          </p>
+        </div>
+      </div>
+
+      <div class="hop">
+        <div class="hop__h"><span class="hop__n">7</span><span class="hop__t">真正跑起来的那条命令</span><span class="hop__where">vips.rs:297</span></div>
+        <div class="hop__b">
+          <p><code>spawn_dzsave</code> 用参数拼出的就是这条命令行（默认参数下,<code>out_base</code> 不含扩展名）:</p>
+          <figure>
+            <figcaption><b>实际执行</b><span>环境变量 VIPS_PROGRESS=1</span></figcaption>
+            <pre><code>vips dzsave  "D:\samples\layout.tif"                       \
+             "…\tiles\.tmp-474a08bb14b2e84b-12345\image"    \
+             --layout dz                                    \
+             --tile-size 1024                               \
+             --overlap 1                                    \
+             --depth onepixel                               \
+             --suffix ".webp[lossless]"
+
+# vips 会产出:
+#   …\.tmp-…\image.dzi
+#   …\.tmp-…\image_files\{0..16}\{列}_{行}.webp</code></pre>
+          </figure>
+          <figure>
+            <figcaption><b>src-tauri/src/vips.rs:300-326</b><span>拼命令行的地方</span></figcaption>
+            <pre><code>/// 启动 dzsave 子进程。
+///
+/// `out_base` **不含扩展名**;vips 会生成 `&lt;out_base&gt;.dzi` 和 `&lt;out_base&gt;_files/`。
+pub fn spawn_dzsave(
+    vips: &amp;Path,
+    input: &amp;Path,
+    out_base: &amp;Path,
+    opts: SliceOptions,
+) -&gt; Result&lt;Child, String&gt; {
+    let mut cmd = vips_command(vips);
+
+    cmd.arg("dzsave")
+        .arg(input)
+        .arg(out_base)
+        .arg("--layout").arg("dz")
+        .arg("--tile-size").arg(opts.tile_size.to_string())
+        .arg("--overlap").arg(opts.overlap.to_string())
+        // onepixel: 金字塔一路降到 1×1。缩到最小时仍有东西可显示。
+        .arg("--depth").arg("onepixel")
+        .arg("--suffix").arg(opts.tile_format.suffix_arg(opts.quality))
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+
+    cmd.spawn().map_err(|e| format!("启动 vips dzsave 失败: {e}"))
+}</code></pre>
+          </figure>
+          <div class="note plain">
+            <div class="note__t">每个启动都过 vips_command()</div>
+            <p>
+              它做两件平台相关的修饰:设 <code>VIPS_PROGRESS=1</code>（让 vips 把百分比打到 stdout）,
+              以及在 Windows 上加 <code>CREATE_NO_WINDOW</code> —— <code>vips.exe</code> 是 console 程序,
+              从 GUI 进程启动会闪黑框。
+            </p>
+          </div>
+        </div>
+      </div>
+
+      <div class="hop">
+        <div class="hop__h"><span class="hop__n">8</span><span class="hop__t">切片期间：为什么必须是 spawn_blocking</span><span class="hop__where">commands.rs:207</span></div>
+        <div class="hop__b">
+          <p>
+            <code>child.wait()</code> 会阻塞到切片结束 —— 几分钟。所以整段包在
+            <code>tauri::async_runtime::spawn_blocking</code> 里,不占死异步运行时的工作线程;
+            而命令本身是 <code>async</code>,不占 UI 主线程。两层都要,少一层就是界面冻住。
+          </p>
+          <figure>
+            <figcaption><b>src-tauri/src/commands.rs</b><span>启动 → 记 pid → 归位</span></figcaption>
+            <pre><code>let outcome = tauri::async_runtime::spawn_blocking(move || -&gt; Result&lt;(), String&gt; {
+    let mut child = vips::spawn_dzsave(&amp;vips_exe, &amp;source_for_task, &amp;out_base, opts)?;
+
+    // 记录 pid 以便取消
+    {
+        let state = app_for_task.state::&lt;SliceState&gt;();
+        *state.current.lock().unwrap() = Some(child.id());
+    }
+
+    /* … 两条进度通道,见下一跳 … */
+
+    let status = child.wait().map_err(|e| format!("等待 vips 失败: {e}"))?;
+    stop_flag.store(true, std::sync::atomic::Ordering::Relaxed);
+
+    {
+        let state = app_for_task.state::&lt;SliceState&gt;();
+        *state.current.lock().unwrap() = None;
+    }
+
+    if !status.success() {
+        let _ = std::fs::remove_dir_all(&amp;tmp_for_task);
+        return Err(format!(
+            "vips dzsave 失败(退出码 {status})。请检查文件是否损坏或格式是否受支持。"
+        ));
+    }
+
+    // 原子改名
+    let _ = std::fs::remove_dir_all(&amp;final_for_task);
+    std::fs::rename(&amp;tmp_for_task, &amp;final_for_task)
+        .map_err(|e| format!("落盘失败: {e}"))?;
+
+    Ok(())
+})
+.await
+.map_err(|e| format!("切片任务异常: {e}"))?;</code></pre>
+          </figure>
+          <p class="dim" style="font-size:13px">
+            「取消」按钮走的是另一条命令 <code>cancel_slicing</code>:它把存下来的 pid 拿出来杀掉。
+            Unix 用 <code>SIGKILL</code>（vips 可能忽略 TERM 继续跑完）,Windows 用
+            <code>taskkill /PID … /F /T</code>。
+          </p>
+        </div>
+      </div>
+
+      <div class="hop">
+        <div class="hop__h"><span class="hop__n">9</span><span class="hop__t">进度：两条来源并行，取较大值</span><span class="hop__where">vips.rs:328 · App.vue:146</span></div>
+        <div class="hop__b">
+          <p>
+            一条是 vips 自己报的百分比,一条是数已经落盘的瓦片文件。为什么要两条:vips 的进度输出是多线程的,
+            并不平滑,某段时间可能一动不动,用户会以为卡死。
+          </p>
+          <figure>
+            <figcaption><b>src-tauri/src/vips.rs</b><span>解析 + 转发（stdout 的进度用 \r 刷新同一行）</span></figcaption>
+            <pre><code>/// 实际格式是 `vips temp-3: 45% complete` —— 注意前缀是**临时图像名**(如 `temp-3`),
+/// 不是操作名 `dzsave`,而且这个名字会变。所以这里刻意不匹配任何前缀,
+/// 只从 `%` 往前读数字,免得依赖一个不稳定的字符串。
+pub fn parse_percent(text: &amp;str) -&gt; Option&lt;u32&gt; {
+    let pct_at = text.find('%')?;
+    let digits: String = text[..pct_at]
+        .chars().rev()
+        .take_while(|c| c.is_ascii_digit())
+        .collect::&lt;Vec&lt;_&gt;&gt;()
+        .into_iter().rev().collect();
+    digits.parse().ok()
+}
+
+pub fn forward_progress&lt;F&gt;(child: &amp;mut Child, on_percent: F)
+where F: Fn(u32) + Send + 'static {
+    let Some(stdout) = child.stdout.take() else { return };
+
+    std::thread::spawn(move || {
+        let reader = BufReader::new(stdout);
+        // 进度用 \r 刷新同一行,所以要按 \r 切而不是按 \n
+        for chunk in reader.split(b'\r').flatten() {
+            let text = String::from_utf8_lossy(&amp;chunk);
+            if let Some(pct) = parse_percent(&amp;text) {
+                on_percent(pct);
+            }
+        }
+    });
+}</code></pre>
+          </figure>
+          <p>
+            兜底那条是另一个线程,每 400 ms 递归数一次 <code>image_files/</code> 里的文件数,除以预期的总张数
+            （<code>expected_tile_count</code>,就是 §2 那个交互图在算的公式）。
+          </p>
+          <figure>
+            <figcaption><b>src/App.vue:146-160</b><span>前端合并两条来源</span></figcaption>
+            <pre><code>cleanups.push(
+  await api.onTileProgress((progress) =&gt; {
+    if (progress.phase === 'done') {
+      slicing.value = null
+      return
+    }
+    // vips 自带进度和文件计数兜底会同时发事件,取较大值避免数字回退
+    const percent = Math.max(slicing.value?.percent ?? 0, progress.percent)
+    slicing.value = {
+      percent,
+      tilesDone: Math.max(slicing.value?.tilesDone ?? 0, progress.tilesDone),
+      tilesTotal: progress.tilesTotal,
+    }
+  }),
+)</code></pre>
+          </figure>
+          <div class="note danger">
+            <div class="note__t">事件的时序陷阱</div>
+            <p>
+              Tauri 的 <code>emit</code> 是<strong>广播,且不排队</strong>:监听器还没注册时发出的事件直接消失。
+              所以启动自检 <code>vips_status</code> 有两条来源 —— 事件,加上前端主动调一次
+              <code>vips_info</code> 兜底（<code>App.vue</code> 挂载末尾）。这个项目的做法是:
+              <strong>凡是「必须知道」的状态,都要有一个可主动拉取的命令。</strong>
+            </p>
+          </div>
+        </div>
+      </div>
+
+      <div class="hop">
+        <div class="hop__h"><span class="hop__n">10</span><span class="hop__t">返回值：PreparedImage 这份契约</span><span class="hop__where">commands.rs:388 · types.ts:2</span></div>
+        <div class="hop__b">
+          <p>
+            Rust 侧所有的「到这一步为止,前端需要知道的一切」都压进这一个结构,前端拿到它就可以直接构造瓦片源,
+            不必再问后端任何问题。
+          </p>
+          <figure>
+            <figcaption><b>src-tauri/src/commands.rs</b><span>build_result</span></figcaption>
+            <pre><code>fn build_result(
+    id: String,
+    source_path: String,
+    meta: vips::ImageMeta,
+    opts: SliceOptions,
+    from_cache: bool,
+    cache_bytes: u64,
+) -&gt; PreparedImage {
+    PreparedImage {
+        tiles_url: tiles_protocol::tiles_url(&amp;id),   // §5：URL 前缀只在一个地方拼
+        tile_count_estimate: vips::expected_tile_count(meta.width, meta.height, opts.tile_size),
+        id,
+        source_path,
+        width: meta.width,
+        height: meta.height,
+        tile_size: opts.tile_size,
+        tile_overlap: opts.overlap,
+        file_format: opts.tile_format.extension().to_string(),
+        from_cache,
+        cache_bytes,
+    }
+}</code></pre>
+          </figure>
+          <figure>
+            <figcaption><b>src/types.ts</b><span>镜像的另一半 —— 改一边必须改另一边</span></figcaption>
+            <pre><code>/** 与 Rust 侧 `commands::PreparedImage` 一一对应。 */
+export interface PreparedImage {
+  id: string
+  sourcePath: string
+  width: number
+  height: number
+  tileSize: number
+  tileOverlap: number
+  /** 瓦片扩展名,不含点。OpenSeadragon 的 fileFormat 用的就是它。 */
+  fileFormat: string
+  /** 已含平台前缀、结尾带 `/` */
+  tilesUrl: string
+  fromCache: boolean
+  tileCountEstimate: number
+  cacheBytes: number
+}</code></pre>
+          </figure>
+        </div>
+      </div>
+
+      <div class="hop">
+        <div class="hop__h"><span class="hop__n">11</span><span class="hop__t">交给 OpenSeadragon</span><span class="hop__where">useViewer.ts:93</span></div>
+        <div class="hop__b">
+          <p>
+            这里就是问题里那个「某个库」:<strong>OpenSeadragon</strong>,用 canvas 画瓦片。
+            注意它<strong>不是</strong> <code>tileSources: 'xxx.dzi'</code> 那种字符串写法 —— 直接用手上的元数据构造
+            <code>DziTileSource</code>,省掉一次 .dzi 的 XHR 往返,也绕开相对路径解析。
+          </p>
+          <figure>
+            <figcaption><b>src/osd/useViewer.ts</b><span>load</span></figcaption>
+            <pre><code>/**
+ * 加载已切片的图像。
+ *
+ * 直接用元数据构造 DziTileSource,**不走 `tileSources: 'xxx.dzi'` 字符串路径**。
+ * 好处:不产生 .dzi 的 XHR(少一次往返、少一条 CSP 规则)、绕开相对路径解析、
+ * 而且 tilesUrl 是我们算好的绝对地址。秒开体验也更好。
+ */
+function load(image: PreparedImage) {
+  const instance = viewer.value
+  if (!instance) return
+
+  isOpen.value = false
+  instance.open({
+    tileSource: new OpenSeadragon.DziTileSource({
+      width: image.width,
+      height: image.height,
+      tileSize: image.tileSize,
+      tileOverlap: image.tileOverlap,
+      tilesUrl: image.tilesUrl,
+      fileFormat: image.fileFormat,
+    }),
+  })
+}</code></pre>
+          </figure>
+          <p>之后 OSD 自己按视野决定要哪几张。它拼 URL 的规则简单到可以直接背下来（<code>node_modules/openseadragon</code> 里 <code>DziTileSource.getTileUrl</code>）:</p>
+          <figure>
+            <figcaption><b>OpenSeadragon 内部</b><span>level 号 = 磁盘上的目录号</span></figcaption>
+            <pre><code>getTileUrl: function( level, x, y ) {
+    return [ this.tilesUrl, level, '/', x, '_', y, '.', this.fileFormat ].join( '' );
+}
+
+// → http://bigimgpin.localhost/tiles/474a08bb14b2e84b/image_files/12/2_1.webp
+//     └──────── tilesUrl ────────────────────────────────┘  └level┘ └x┘└y┘ └格式┘</code></pre>
+          </figure>
+        </div>
+      </div>
+
+      <div class="hop">
+        <div class="hop__h"><span class="hop__n">12</span><span class="hop__t">这个 URL 谁在接</span><span class="hop__where">tiles_protocol.rs</span></div>
+        <div class="hop__b">
+          <p>
+            <code>bigimgpin://localhost/…</code> 是自己注册的协议,不是文件系统。它只做一件事:
+            把 URL 路径映射到缓存目录里的一个文件,读出来,带正确的 MIME 和缓存头回给 WebView。
+            <strong>图片字节完全不经过 IPC</strong> —— 这是这套架构里最省事的一处设计。
+          </p>
+          <p>细节见 <a href="#s5">§5</a>。</p>
+        </div>
+      </div>
+    </section>
+
+    <!-- ============================================================ 04 -->
+    <section id="s4">
+      <h2><span class="num">04</span>缓存键与原子落盘</h2>
+
+      <p>缓存位置:<code>app_local_data_dir()/tiles/&lt;cache_key&gt;/</code>,Windows 上就是</p>
+      <pre><code>%LOCALAPPDATA%\com.liuliyi.bigimgpin\tiles\
+    474a08bb14b2e84b\            ← cache_key，16 位十六进制
+        image.dzi
+        image_files\{0..16}\…</code></pre>
+
+      <figure>
+        <figcaption><b>src-tauri/src/commands.rs:437-457</b><span>hash 里放了什么,漏一个就出事</span></figcaption>
+        <pre><code>/// 缓存键。
+///
+/// 包含切片参数 —— 否则改了瓦片尺寸或格式会命中旧缓存,拿到一批尺寸不符的瓦片,
+/// 表现为图像错位。用 DefaultHasher 而非 sha256:这里只需要碰撞概率可忽略,
+/// 不需要密码学强度,不值得为它引一个依赖。
+fn cache_key(path: &amp;str, len: u64, modified: u64, opts: &amp;SliceOptions) -&gt; String {
+    use std::hash::{Hash, Hasher};
+
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    path.hash(&amp;mut hasher);
+    len.hash(&amp;mut hasher);
+    modified.hash(&amp;mut hasher);
+    opts.tile_size.hash(&amp;mut hasher);
+    opts.overlap.hash(&amp;mut hasher);
+    opts.tile_format.extension().hash(&amp;mut hasher);
+    if opts.tile_format == TileFormat::Jpeg {
+        opts.quality.hash(&amp;mut hasher);
+    }
+
+    format!("{:016x}", hasher.finish())
+}</code></pre>
+      </figure>
+
+      <p>
+        三件事值得单独点出来:<strong>路径 + 大小 + mtime</strong> 一起构成「这是不是同一张图」;
+        <strong>切片参数进 hash</strong>,所以改参数 = 换目录 = 重切一份;
+        而 <strong>JPEG 质量只在用 JPEG 时才进 hash</strong> —— PNG 是无损的,质量参数对它无意义,
+        否则改一下质量会白白分裂出一份一模一样的缓存（有测试
+        <code>png_quality_does_not_affect_key</code> 守着这条）。
+      </p>
+
+      <h3>落盘：临时目录 + 原子改名</h3>
+      <figure>
+        <figcaption><b>src-tauri/src/commands.rs:183-187, 279-282</b><span>先写 .tmp，成功后整体改名</span></figcaption>
+        <pre><code>// 切到临时目录,成功后整体改名。中途崩溃不会留下被误判为「命中」的半成品。
+let tmp_dir = cache_root.join(format!(".tmp-{id}-{}", std::process::id()));
+let _ = std::fs::remove_dir_all(&amp;tmp_dir);
+std::fs::create_dir_all(&amp;tmp_dir).map_err(|e| format!("无法创建临时目录: {e}"))?;
+let out_base = tmp_dir.join("image");
+
+/* … 切片 … */
+
+// 原子改名
+let _ = std::fs::remove_dir_all(&amp;final_for_task);
+std::fs::rename(&amp;tmp_for_task, &amp;final_for_task)
+    .map_err(|e| format!("落盘失败: {e}"))?;</code></pre>
+      </figure>
+
+      <table>
+        <thead><tr><th>防的是什么</th><th>怎么防的</th></tr></thead>
+        <tbody>
+          <tr>
+            <td>中途崩溃留下半成品</td>
+            <td>写在 <code>.tmp-&lt;id&gt;-&lt;pid&gt;/</code>,只有 vips 退出码为 0 才改名成正式目录</td>
+          </tr>
+          <tr>
+            <td>改完参数命中旧缓存</td>
+            <td>参数进 <code>cache_key</code>,目录就换了</td>
+          </tr>
+          <tr>
+            <td>只切了 .dzi、瓦片目录没写完</td>
+            <td>命中判定要求 <code>image.dzi</code> <strong>和</strong> <code>image_files/</code> 同时存在</td>
+          </tr>
+          <tr>
+            <td>清缓存时删到正在写的目录</td>
+            <td><code>cache_stats</code> 跳过 <code>.tmp-</code> 前缀;<code>clear_cache</code> 整个根目录删掉</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <div class="note">
+        <div class="note__t">缓存占用为什么给两个数</div>
+        <p>
+          <code>cache_stats</code>（全局:总字节 + 图片数）和 <code>PreparedImage.cacheBytes</code>（当前这张）是两回事。
+          只给一个的话,人会拿当前图的大小去估计能清出多少空间 —— 那多半差着几十倍。
+          状态栏那一格是<strong>当前这张</strong>,它是清理入口,但不是清理的量。
+        </p>
+      </div>
+    </section>
+
+    <!-- ============================================================ 05 -->
+    <section id="s5">
+      <h2><span class="num">05</span>瓦片怎么送到前端</h2>
+
+      <p>
+        WebView 不能直接读 <code>D:\…</code>（也不该读）。这个项目没有用 Tauri 内置的 asset 协议,
+        而是自己注册了一个 <code>bigimgpin</code> 协议,只暴露缓存根目录:
+      </p>
+
+      <figure>
+        <figcaption><b>src-tauri/src/tiles_protocol.rs:1-33</b><span>为什么不复用现成的</span></figcaption>
+        <pre><code>//! 为什么不用 Tauri 内置的 asset 协议:asset 协议需要配 glob scope,而各平台的
+//! 缓存目录形态不一(macOS 在 `~/Library/...`,Linux 在带点的 `~/.local/share/...`,
+//! 后者会踩 `requireLiteralLeadingDot` 的坑)。自己实现协议可以**只暴露缓存根目录**,
+//! 而且 MIME、缓存头、404 语义全在自己手里 —— 出问题时前端看到的是明确的 HTTP 状态码,
+//! 而不是一块没有解释的白。
+
+/// 协议名。前端拼 URL 时必须用这个。
+pub const SCHEME: &amp;str = "bigimgpin";
+
+/// URL 前缀的**唯一收敛点**。
+///
+/// Windows/Android 上自定义协议被映射成 `http://&lt;scheme&gt;.localhost`,
+/// 其他平台是 `&lt;scheme&gt;://localhost`。两处不一致会导致其中一个平台静默白屏,
+/// 所以整个代码库里只允许这一个地方做这个判断。
+pub fn protocol_origin() -&gt; &amp;'static str {
+    if cfg!(windows) {
+        "http://bigimgpin.localhost"
+    } else {
+        "bigimgpin://localhost"
+    }
+}
+
+/// 一次切片产物的瓦片根 URL(给 OpenSeadragon 的 `tilesUrl`,结尾必须带 `/`)。
+pub fn tiles_url(id: &amp;str) -&gt; String {
+    format!("{}/tiles/{}/image_files/", protocol_origin(), id)
+}</code></pre>
+      </figure>
+
+      <p>处理器本身很短:URL → 相对路径 → 白名单校验 → 读文件 → 回响应。</p>
+
+      <figure>
+        <figcaption><b>src-tauri/src/tiles_protocol.rs:37-90</b><span>handle（节选）</span></figcaption>
+        <pre><code>pub fn handle&lt;R: Runtime&gt;(
+    ctx: UriSchemeContext&lt;'_, R&gt;,
+    request: http::Request&lt;Vec&lt;u8&gt;&gt;,
+    responder: UriSchemeResponder,
+) {
+    let app_dir = match ctx.app_handle().path().app_local_data_dir() { /* … */ };
+
+    // URL 形如 /tiles/&lt;id&gt;/image_files/8/1_2.jpg
+    let raw_path = request.uri().path().to_string();
+    let decoded = percent_decode(raw_path.trim_start_matches('/'));
+
+    let Some(relative) = safe_relative_path(&amp;decoded) else {
+        return respond_text(responder, StatusCode::FORBIDDEN, "路径非法");
+    };
+
+    let absolute = app_dir.join(&amp;relative);
+
+    // 二次确认:即使前面的逐段校验有疏漏,也不能跑出数据目录
+    if !absolute.starts_with(&amp;app_dir) {
+        return respond_text(responder, StatusCode::FORBIDDEN, "路径越界");
+    }
+
+    let content_type = content_type_for(&amp;absolute);
+
+    // 文件 IO 放到独立线程 —— 绝不占用主线程或异步运行时的工作线程
+    std::thread::spawn(move || match std::fs::read(&amp;absolute) {
+        Ok(bytes) =&gt; {
+            let response = http::Response::builder()
+                .status(StatusCode::OK)
+                .header(http::header::CONTENT_TYPE, content_type)
+                // 缓存内容由内容哈希寻址,永不改变,可以放心长缓存
+                .header(http::header::CACHE_CONTROL,
+                        "public, max-age=31536000, immutable")
+                .body(bytes)
+                .expect("构造响应失败");
+            responder.respond(response);
+        }
+        Err(e) =&gt; { /* NotFound → 404，其余 → 500 */ }
+    });
+}</code></pre>
+      </figure>
+
+      <h3>路径校验是白名单，不是黑名单</h3>
+      <figure>
+        <figcaption><b>src-tauri/src/tiles_protocol.rs:92-118</b><span>safe_relative_path</span></figcaption>
+        <pre><code>/// 逐段白名单校验。
+///
+/// 只允许字母数字和 `._-`,于是 `..`、绝对路径、盘符、URL 编码的斜杠全部被拒。
+/// 比「拼完再检查前缀」更严格 —— 前者是黑名单,这里是白名单。
+fn safe_relative_path(path: &amp;str) -&gt; Option&lt;PathBuf&gt; {
+    let mut out = PathBuf::new();
+
+    for segment in path.split('/') {
+        if segment.is_empty() || segment == "." || segment == ".." {
+            return None;
+        }
+        if !segment.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-')) {
+            return None;
+        }
+        out.push(segment);
+    }
+
+    // 必须落在 tiles/ 下,防止协议被当成任意文件读取器
+    if out.components().next() != Some(Component::Normal("tiles".as_ref())) {
+        return None;
+    }
+
+    Some(out)
+}</code></pre>
+      </figure>
+
+      <div class="note danger">
+        <div class="note__t">注册必须用异步版</div>
+        <p>
+          <code>register_asynchronous_uri_scheme_protocol</code>:同步版的处理器在 macOS 上跑在
+          <strong>主线程</strong>,一次慢磁盘 IO 就掉帧。
+        </p>
+      </div>
+
+      <figure>
+        <figcaption><b>src-tauri/src/lib.rs:20-34</b><span>组装:协议 + 命令表</span></figcaption>
+        <pre><code>.manage(commands::SliceState::default())
+// 异步版:vips 瓦片是磁盘 IO,同步版在 macOS 上会跑在主线程并掉帧
+.register_asynchronous_uri_scheme_protocol(tiles_protocol::SCHEME, tiles_protocol::handle)
+.invoke_handler(tauri::generate_handler![
+    commands::vips_info,
+    commands::pick_image,
+    commands::prepare_image,
+    commands::cancel_slicing,
+    commands::cache_stats,
+    commands::clear_cache,
+    annotations::load_annotations,
+    annotations::save_annotations,
+    export::export_regions_csv,
+    export::export_crops,
+])</code></pre>
+      </figure>
+      <p class="dim" style="font-size:13px">
+        加一个新命令要同步三处:这里的 <code>generate_handler!</code>、<code>src/api/tauri.ts</code>、<code>src/types.ts</code>。
+        漏掉第一处,前端调它会直接 reject,而且没有日志告诉你为什么。
+      </p>
+    </section>
+
+    <!-- ============================================================ 06 -->
+    <section id="s6">
+      <h2><span class="num">06</span>坐标：唯一出口</h2>
+
+      <p>
+        图像像素 ↔ 屏幕像素的换算全在 <code>src/osd/coords.ts</code> 里,别处不许写第二遍。
+        文件头列了三条硬规则,每条对应一个真实踩过的坑:
+      </p>
+
+      <figure>
+        <figcaption><b>src/osd/coords.ts:1-16</b><span>三条硬规则</span></figcaption>
+        <pre><code>/**
+ * 图像坐标 ↔ 屏幕坐标换算的**唯一出口**。
+ *
+ * 1. 一律用 `TiledImage` 上的方法,不要用 `viewer.viewport` 上的同名方法。
+ *    Viewport 版本在多图场景下不准确(OpenSeadragon 源码里会 console.error
+ *    提示改用 TiledImage 版本),而且不会告诉你算错了,只是位置偏一点。
+ *
+ * 2. 屏幕坐标是**相对 viewer.element 左上角**的像素,不是 clientX/clientY。
+ *    调用方负责减去 bounding rect。
+ *
+ * 3. OpenSeadragon 的 "zoom" 不是百分比,而是「整图宽度对应多少个 viewport 单位」。
+ *    zoom = 1 表示整图铺满容器宽度,跟 100% 完全不是一回事。要用
+ *    `imageToViewportZoom(1)` 才是真正的 1:1。
+ */</code></pre>
+      </figure>
+
+      <figure>
+        <figcaption><b>src/osd/coords.ts:27-40</b><span>每次换算都先取第一张图层</span></figcaption>
+        <pre><code>/** 取第一张(也是唯一一张)切片图层。没有图像时返回 null。 */
+export function firstTile(viewer: OpenSeadragon.Viewer): OpenSeadragon.TiledImage | null {
+  return viewer.world.getItemCount() &gt; 0 ? viewer.world.getItemAt(0) : null
+}
+
+/** 屏幕像素(相对 viewer.element)→ 图像像素。 */
+export function screenToImage(
+  viewer: OpenSeadragon.Viewer,
+  screenX: number,
+  screenY: number,
+): { x: number; y: number } | null {
+  const tile = firstTile(viewer)
+  if (!tile) return null
+
+  const point = tile.viewerElementToImageCoordinates(
+    new OpenSeadragon.Point(screenX, screenY),
+  )
+  return { x: point.x, y: point.y }
+}</code></pre>
+      </figure>
+
+      <p>
+        叠加层每帧要转换几十个坐标,逐个调 API 太慢,所以有一个
+        <code>imageToScreenTransform(viewer)</code>:取两个点定出「等比 + 平移」的参数,
+        之后自己算。无旋转时这个映射就是等比的,两点足够。
+      </p>
+
+      <h3>坐标小数位：一个设置，三处生效</h3>
+      <p>
+        <code>coordDecimals</code> 默认为 <strong>0,也就是全按整数</strong>。它同时管:
+        屏幕上的读数、新框的坐标收敛、导出 CSV 的位数。
+        <strong>拆开管就会出现「屏幕上写 1235、文件里存 1234.57、导出又是 1234.57」</strong>,
+        三处对不上,人就没法信任何一处。
+      </p>
+      <figure>
+        <figcaption><b>src/osd/coords.ts:179-197</b><span>收敛用 toFixed，不用乘除取整</span></figcaption>
+        <pre><code>/**
+ * 按当前精度收敛一个坐标值。
+ *
+ * 用 `toFixed` 而不是 `Math.round(v * 10^n) / 10^n`:后者会引入二进制浮点误差,
+ * 比如 1.005 会变成 1.00。
+ */
+export function roundCoord(value: number): number {
+  return Number(value.toFixed(coordDecimals.value))
+}
+
+/** 把一个矩形按当前精度收敛。所有框在进入列表前都要过这一关。 */
+export function roundRect(rect: Rect): Rect {
+  return {
+    x: roundCoord(rect.x),
+    y: roundCoord(rect.y),
+    w: roundCoord(rect.w),
+    h: roundCoord(rect.h),
+  }
+}</code></pre>
+      </figure>
+
+      <h3>拖手柄：全程在四条边上算</h3>
+      <figure>
+        <figcaption><b>src/osd/coords.ts:238-268</b><span>resizeRect</span></figcaption>
+        <pre><code>export function resizeRect(origin: Rect, handle: HandleId, dx: number, dy: number): Rect {
+  const min = 10 ** -coordDecimals.value
+
+  let left = roundCoord(origin.x)
+  let right = roundCoord(origin.x + origin.w)
+  let top = roundCoord(origin.y)
+  let bottom = roundCoord(origin.y + origin.h)
+
+  if (handle.includes('w')) left = roundCoord(origin.x + dx)
+  if (handle.includes('e')) right = roundCoord(origin.x + origin.w + dx)
+  if (handle.includes('n')) top = roundCoord(origin.y + dy)
+  if (handle.includes('s')) bottom = roundCoord(origin.y + origin.h + dy)
+
+  // 撞到下限时把**被拖的那条边**钉在距对边一格的位置:用户拖的是这条边,
+  // 让它停下来就行,对面那条不该动。
+  if (right - left &lt; min) {
+    if (handle.includes('w')) left = right - min
+    else right = left + min
+  }
+  if (bottom - top &lt; min) {
+    if (handle.includes('n')) top = bottom - min
+    else bottom = top + min
+  }
+
+  // 两条边都收敛过,差值还要再收敛一次:1.1 - 0.1 在浮点里是 1.0000000000000002
+  return { x: left, y: top, w: roundCoord(right - left), h: roundCoord(bottom - top) }
+}</code></pre>
+      </figure>
+      <p>
+        要害是<strong>不要对 <code>x</code> 和 <code>w</code> 各自取整</strong> ——
+        那样原始右边界会被舍入两次,拖左边的时候右边会跟着跳一格。用户拖的是左边,右边一动就说明搞错了对象。
+      </p>
+    </section>
+
+    <!-- ============================================================ 07 -->
+    <section id="s7">
+      <h2><span class="num">07</span>标注：状态、画布、落盘</h2>
+
+      <h3>一个状态源，撑起撤销</h3>
+      <p>
+        框、辅助线、选中项、撤销栈全在 <code>useAnnotations.ts</code>。
+        撤销是<strong>快照式</strong>（整体替换 + 一个 cursor）,不是给每种操作写逆操作 ——
+        因为「导入整份标注文件」这种一次性替换全部状态的操作,命令式根本接不进去。
+      </p>
+
+      <figure>
+        <figcaption><b>src/state/useAnnotations.ts:87-132</b><span>压栈 / 还原 / 撤销</span></figcaption>
+        <pre><code>function apply(snap: Snapshot) {
+  regions.value = snap.regions
+  guides.value = snap.guides
+  // 只清掉已经不在还原结果里的选中项(比如撤销掉一个刚建的框)。
+  // 不做别的 —— 撤销该只改「画了什么」,不该顺手改选中态。
+  const alive = new Set(snap.regions.map((r) =&gt; r.id))
+  const kept = [...selectedIds.value].filter((id) =&gt; alive.has(id))
+  if (kept.length !== selectedIds.value.size) selectedIds.value = new Set(kept)
+}
+
+/** 只压栈。coalesce 为 true 时覆盖栈顶而不是压新的一层。 */
+function push(coalesce: boolean) {
+  const snap: Snapshot = { regions: regions.value, guides: guides.value }
+  history.value =
+    coalesce &amp;&amp; cursor.value &gt; 0
+      ? [...history.value.slice(0, cursor.value), snap]
+      : [...history.value.slice(0, cursor.value + 1), snap]
+
+  if (history.value.length &gt; HISTORY_LIMIT) {
+    history.value = history.value.slice(history.value.length - HISTORY_LIMIT)
+  }
+  cursor.value = history.value.length - 1
+  revision.value += 1
+}
+
+function undo() {
+  if (!canUndo.value) return
+  cursor.value -= 1
+  apply(history.value[cursor.value])
+  revision.value += 1
+}</code></pre>
+      </figure>
+
+      <p>由此有四条不能破的规则:</p>
+      <table>
+        <thead><tr><th>规则</th><th>为什么</th></tr></thead>
+        <tbody>
+          <tr>
+            <td>拖拽中只改坐标,松手才 <code>commit()</code></td>
+            <td>一次拖拽在撤销栈里是「一步」,不是几十步（<code>setRegionsRects</code> 刻意不记还原点）</td>
+          </tr>
+          <tr>
+            <td>自动保存盯 <code>revision</code>,不盯 <code>regions</code></td>
+            <td>拖拽每个 pointermove 都换掉数组,盯数组就是一次拖拽触发几十次写盘</td>
+          </tr>
+          <tr>
+            <td>叠加层通过 <code>watch(regions)</code> 跟着状态走</td>
+            <td>漏掉一处 <code>overlay.setRegions()</code> 就是「框进了列表但屏幕上看不见」,只在特定操作顺序下暴露</td>
+          </tr>
+          <tr>
+            <td>选中是 <code>Set&lt;string&gt;</code>,不是数组</td>
+            <td>画布每帧对每个框问一次「你选中了吗」,数组 <code>includes</code> 在框多起来后是每帧几万次比较</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <figure>
+        <figcaption><b>src/App.vue:596-601</b><span>自动保存只有一个触发点</span></figcaption>
+        <pre><code>// 盯的是 revision 而不是 regions:拖拽过程中每个 pointermove 都会换掉数组,
+// 直接盯数组的话,一次拖拽会触发几十次写盘。
+watch(revision, () =&gt; {
+  // 打开图看了看、什么都没画,就别在图片目录里凭空多出一个文件
+  const empty = annotations.regions.value.length === 0 &amp;&amp; annotations.guides.value.length === 0
+  if (empty &amp;&amp; annotationFile.value === null) return
+  void flushAnnotations()
+})</code></pre>
+      </figure>
+
+      <h3>画布：自绘一层屏幕空间 SVG</h3>
+      <p>
+        网格、辅助线、框、预览框、八个缩放手柄,全画在<strong>一张屏幕空间的 <code>&lt;svg&gt;</code></strong>
+        上,监听 OSD 的 <code>update-viewport</code> 整层重绘。不这么做的话:线宽会随缩放变成色块
+        （屏幕空间绘制让线宽恒为 2px）,而且 <code>addOverlay</code> 的坐标系是 viewport 而不是图像。
+      </p>
+      <figure>
+        <figcaption><b>src/osd/useAnnotationSvg.ts:1-17</b><span>为什么不用 addOverlay</span></figcaption>
+        <pre><code>/**
+ * 为什么不用 `viewer.addOverlay()`:
+ *
+ * 1. `addOverlay` 的 `location` 是 **viewport 坐标**,不是图像坐标。传图像像素进去
+ *    会得到整体偏移,而且偏移量随缩放变化 —— 很难排查。
+ * 2. 每个 overlay 会被包一层 div,默认 `checkResize: true` 时每帧调
+ *    `getElementSize()` **强制布局重排**。几十个框就是每帧几十次 reflow。
+ * 3. `update-viewport` 由 requestAnimationFrame 驱动,正好一帧一次,
+ *    比 overlay 的逐元素样式更新便宜得多。
+ */</code></pre>
+      </figure>
+
+      <div class="note">
+        <div class="note__t">手柄：画在哪，就在哪命中</div>
+        <p>
+          <code>drawRegions</code> 画手柄时顺手把八个点的<strong>屏幕坐标</strong>记进
+          <code>handlePoints</code>,<code>handleAt(x, y)</code> 直接查那份。
+          分开各算一次迟早会出现「看着在手柄上、点下去却没反应」,而且只在某些缩放比例下出现。
+        </p>
+      </div>
+
+      <figure>
+        <figcaption><b>src/App.vue:260-287</b><span>判断顺序：先手柄、后框</span></figcaption>
+        <pre><code>function onPointerDown(event: PointerEvent) {
+  if (mode.value !== 'draw' || !image.value || event.button !== 0) return
+
+  const screen = pointerToScreen(event)
+  const point = pointerToImage(event)
+  if (!screen || !point) return
+
+  // 手柄必须先判:它就压在选中框的边框上,和「点中这个框」是重叠的。
+  // 反过来先判框的话,选中的框永远拖不到自己的手柄。
+  const sole = selectedId.value
+  if (sole) {
+    const handle = overlay.handleAt(screen.x, screen.y)
+    const region = regions.value.find((r) =&gt; r.id === sole)
+    if (handle &amp;&amp; region) {
+      drag = { kind: 'resize', handle, grabX: point.x, grabY: point.y,
+               origins: originsOf([sole]) }
+      ;(event.target as Element).setPointerCapture?.(event.pointerId)
+      event.preventDefault()
+      return
+    }
+  }
+  /* … 再判框、再判空白画新框 … */
+}</code></pre>
+      </figure>
+
+      <h3>落盘：源图旁边的 sidecar</h3>
+      <p>
+        标注存在<code>&lt;图名&gt;.bigimgpin.json</code> —— <strong>追加</strong>而不是替换扩展名
+        （<code>a.tif</code> 和 <code>a.png</code> 是两张不同的图,不能共用一份标注）。
+        同目录写不进去时退回应用数据目录,状态栏显示实际位置。
+      </p>
+
+      <div class="note danger">
+        <div class="note__t">「半新半旧」是这里唯一的致命坑</div>
+        <p>
+          <code>image.value = prepared</code> 和 <code>applyAnnotations()</code> <strong>必须在同一个同步块里</strong>,
+          中间不能插 <code>await</code>。否则正在跑的自动保存会读到「新图 + 旧框」这个组合,
+          把 A 图的框写进 B 图的标注文件。所以读标注拆成了两步:
+          <code>fetchAnnotations</code>（异步、不碰状态）+ <code>applyAnnotations</code>（同步）。
+        </p>
+        <p>
+          另一条:<strong>读不出已有的标注文件时（JSON 坏了、或版本更高）停用自动保存</strong>,
+          而不是报个错接着存。空标注覆盖掉的是用户唯一的产出物。
+        </p>
+      </div>
+
+      <figure>
+        <figcaption><b>src/App.vue:521-548</b><span>applyAnnotations</span></figcaption>
+        <pre><code>function applyAnnotations(loaded: LoadedAnnotations, current: PreparedImage) {
+  annotationFile.value = loaded.filePath
+  annotationWarning.value = null
+  saveEnabled = false
+
+  if (loaded.failure) {
+    // 文件在,但读不出来(JSON 坏了,或是更新版本写的)。
+    // **必须停掉自动保存**:否则用户随手拖一下框,我们就用一份空标注
+    // 把他唯一的那份产出物盖掉了 —— 那比「读不出来」严重得多。
+    annotationWarning.value =
+      `这份标注没能读出来(${loaded.failure}),自动保存已停用,以免覆盖它:` +
+      `${loaded.filePath ?? '未知路径'}`
+    annotations.reset([], [])
+    return
+  }
+
+  saveEnabled = true
+  annotations.reset(loaded.doc?.regions ?? [], loaded.doc?.guides ?? [])
+
+  // 尺寸对不上说明同路径的图被换过了。仍然加载 —— 用户可能就是想把旧标注贴上来对照
+  const source = loaded.doc?.source
+  if (source &amp;&amp; (source.width !== current.width || source.height !== current.height)) {
+    annotationWarning.value =
+      `标注是按 ${source.width} × ${source.height} 存的,当前图是 ${current.width} × ${current.height}`
+  } else if (loaded.mismatch) {
+    annotationWarning.value = loaded.mismatch
+  }
+}</code></pre>
+      </figure>
+
+      <p>写盘是<strong>串行化</strong>的（上一次没写完就记个标记,写完再补一次）,而且刻意不做防抖:</p>
+      <figure>
+        <figcaption><b>src/App.vue:550-592</b><span>flushAnnotations（节选）</span></figcaption>
+        <pre><code>/**
+ * 写盘串行化:上一次还没写完就只记个标记,写完再补一次 ——
+ * 两次写盘交错的话,后写的那次会覆盖先写的,而它们的内容可能已经不是同一份状态了。
+ *
+ * 不做防抖:一次拖拽只在松手时提交一次,写盘频率本来就低;
+ * 而防抖会在「改完立刻关窗」时把最后一次改动丢掉。
+ */
+async function flushAnnotations() {
+  if (!saveEnabled) return
+  if (saving) { savePending = true; return }
+
+  saving = true
+  try {
+    do {
+      savePending = false
+      const current = image.value
+      if (!current || !saveEnabled) return
+
+      const outcome = await api.saveAnnotations(
+        current.sourcePath, current.width, current.height,
+        annotations.regions.value, annotations.guides.value,
+      )
+      annotationFile.value = outcome.filePath
+      if (outcome.fallback &amp;&amp; annotationWarning.value === null) {
+        annotationWarning.value = `源图目录写不进去,标注存在了 ${outcome.filePath}(拷图给别人时记得一起带上)`
+      }
+    } while (savePending)
+  } catch (error) {
+    // 存不下去就停掉自动保存并说清楚,而不是每次改动都弹一遍同样的错
+    saveEnabled = false
+    annotationWarning.value = `标注自动保存失败,已停用:${error}`
+  } finally {
+    saving = false
+  }
+}</code></pre>
+      </figure>
+    </section>
+
+    <!-- ============================================================ 08 -->
+    <section id="s8">
+      <h2><span class="num">08</span>导出：语义留在前端</h2>
+
+      <p>
+        <code>export.rs</code> 只管格式化、夹取和写盘。<strong>坐标变换不在这层</strong>:
+        要不要套「偏移 / 系数 k」的逆变换,由 <code>RectPanel.vue</code> 决定 —— 它才是持有那套参数的地方。
+        坐标系语义有两个地方知道,迟早会分叉。
+      </p>
+
+      <figure>
+        <figcaption><b>src-tauri/src/export.rs:138-169</b><span>CSV 的 BOM 与转义</span></figcaption>
+        <pre><code>/// 表格文本。
+fn build_csv(rects: &amp;[ExportRect], decimals: u32) -&gt; String {
+    // 开头的 BOM 是必须的:没有它 Excel 会按本地代码页解,中文列名直接变乱码。
+    // 换行用 CRLF,Excel 对这个最省心。
+    let mut out = String::from("\u{feff}序号,x,y,w,h,名称\r\n");
+    let prec = decimals as usize;
+    for (index, rect) in rects.iter().enumerate() {
+        out.push_str(&amp;format!(
+            "{},{:.prec$},{:.prec$},{:.prec$},{:.prec$},{}\r\n",
+            index + 1, rect.x, rect.y, rect.w, rect.h,
+            csv_field(rect.name.as_deref().unwrap_or("")),
+            prec = prec
+        ));
+    }
+    out
+}
+
+/// 坐标列全是数字,本来用不着转义;但**名称是用户随手打的** ——
+/// 里面出现一个逗号就会让整行多出一列、后面全部错位,而且是打开表格才看得出来。
+fn csv_field(value: &amp;str) -&gt; String {
+    if value.contains([',', '"', '\n', '\r']) {
+        format!("\"{}\"", value.replace('"', "\"\""))
+    } else {
+        value.to_string()
+    }
+}</code></pre>
+      </figure>
+
+      <div class="note">
+        <div class="note__t">小数位只负责「打印几位」</div>
+        <p>
+          数值是前端按同一精度收敛好才送过来的。两边各舍入一次会用到两套舍入规则
+          （JS 的 <code>toFixed</code> 与 Rust 的格式化在恰好 .5 上不一致）,
+          同一个框在屏幕和表格里就可能不一样。
+        </p>
+      </div>
+
+      <h3>裁剪：vips 越界会直接不产出文件</h3>
+      <figure>
+        <figcaption><b>src-tauri/src/export.rs:171-201</b><span>normalize —— 先夹到图内</span></figcaption>
+        <pre><code>/// 把浮点框收敛成整数像素区域,并夹到图像范围内。
+///
+/// 界面上是**故意**允许画越界的框的(见 RectPanel:「有时就是要生成越界的框来对照」),
+/// 但 vips 遇到越界会直接 `bad extract area` 并且不产出文件,所以这里夹一次。
+/// 完全落在图外的返回 None,由调用方记一条跳过。
+fn normalize(rect: &amp;ExportRect, width: u32, height: u32) -&gt; Option&lt;(u32, u32, u32, u32)&gt; {
+    // NaN 必须先挡掉。f64::max/min 的规则是「另一个操作数是 NaN 就返回它」,
+    // 于是 NaN 会被静默换成 0 或图像边界,拼出一个看着合法、其实毫无意义的区域。
+    if ![rect.x, rect.y, rect.w, rect.h].iter().all(|v| v.is_finite()) {
+        return None;
+    }
+
+    // 两条边各自取整再相减,而不是先取整宽高:框覆盖到哪些像素,由两条边决定。
+    let left = rect.x.round().max(0.0);
+    let top = rect.y.round().max(0.0);
+    let right = (rect.x + rect.w).round().min(width as f64);
+    let bottom = (rect.y + rect.h).round().min(height as f64);
+
+    // 比较留在 f64 里做:坐标可能是 1e20 这种值,先转 u32 会饱和成同一个数,
+    // 相减反而变成「看起来合法」的区域。
+    if right - left &lt; 1.0 || bottom - top &lt; 1.0 {
+        return None;
+    }
+
+    Some((left as u32, top as u32, (right - left) as u32, (bottom - top) as u32))
+}</code></pre>
+      </figure>
+
+      <figure>
+        <figcaption><b>src-tauri/src/vips.rs:158-170</b><span>输出容器跟位深走</span></figcaption>
+        <pre><code>/// 裁剪导出用哪种容器。
+///
+/// 实测(vips 8.18.6):uchar → 8 位 PNG,ushort → 16 位 PNG(位深保留),
+/// 而 **float → 8 位 PNG,静默丢精度**。所以浮点/整数类源图改用 TIFF,
+/// 那个容器存得下任意格式。
+///
+/// 静默压位深比报错更危险:导出的裁剪图看着好好的,数值已经被截断了。
+pub fn crop_extension(format: &amp;str) -&gt; &amp;'static str {
+    match format {
+        "uchar" | "ushort" =&gt; "png",
+        _ =&gt; "tif",
+    }
+}</code></pre>
+      </figure>
+    </section>
+
+    <!-- ============================================================ 09 -->
+    <section id="s9">
+      <h2><span class="num">09</span>看着像 bug 的故意设计</h2>
+      <p>以下每一条都更像是「漏了一处处理」,但都是故意的。改动前先看一眼理由。</p>
+
+      <table>
+        <thead><tr><th>看着像</th><th>其实是</th></tr></thead>
+        <tbody>
+          <tr>
+            <td>框能被拖到图像外面</td>
+            <td>画框时会夹到图内,拖动时不夹 —— 「有时就是要生成越界的框来对照」。真要用到越界坐标的地方（裁剪）自己会夹</td>
+          </tr>
+          <tr>
+            <td>拖动模式下没有缩放手柄</td>
+            <td>那时拖拽是平移画面,画着几个拖不动的方块是骗人</td>
+          </tr>
+          <tr>
+            <td>切工具模式没调 <code>setMouseNavEnabled(false)</code></td>
+            <td>它会把滚轮缩放一起禁掉。正确开关是 <code>gestureSettingsByDeviceType('mouse').dragToPan</code></td>
+          </tr>
+          <tr>
+            <td><code>maxImageCacheCount: 80</code> 太小</td>
+            <td>OSD 默认 200 且不按内存预算,1024 瓦片解码后 4 MB/张,默认值会吃掉 800 MB。视口实际只用约 9 张</td>
+          </tr>
+          <tr>
+            <td><code>drawer: 'canvas'</code> 而不是 webgl</td>
+            <td>webgl drawer 走 XHR,会撞上 range 请求相关的坑,而这个项目完全不需要 WebGL</td>
+          </tr>
+          <tr>
+            <td>清缓存要连当前图一起关掉</td>
+            <td>瓦片文件已经删了,留着图只会是一片空白,而且用户不知道发生了什么。标注不受影响（存在图片旁边）</td>
+          </tr>
+          <tr>
+            <td>切片进行中禁用清理按钮</td>
+            <td>正在写入的目录会被删到一半</td>
+          </tr>
+          <tr>
+            <td>改切片参数后旧缓存不自动删</td>
+            <td>它在磁盘上躺着,要省空间得走「清理」。界面必须把这句因果说出来,否则用户只看到「改了个设置,下次打开图又等了几分钟」</td>
+          </tr>
+          <tr>
+            <td>辅助线颜色不跟主题走</td>
+            <td>它画在<strong>图上</strong>而不是界面上,判断依据是「在任意图像内容上都能看见」</td>
+          </tr>
+          <tr>
+            <td>vips 的进度输出前缀不匹配任何操作名</td>
+            <td>实际前缀是临时图像名（<code>temp-3</code>）而且会变。有测试用 <code>temp-3</code> 守着,防止有人「修正」成匹配 <code>dzsave</code></td>
+          </tr>
+          <tr>
+            <td>mtime 存进标注文件却不参与「对不上」判断</td>
+            <td>拷贝文件就会改 mtime,拿它报警只会制造假警报,而被喊几次之后真警报也会被无视</td>
+          </tr>
+          <tr>
+            <td>vips 相关测试找不到二进制时跳过而不是失败</td>
+            <td>开发机上没装 vips 不该让人以为代码坏了</td>
+          </tr>
+        </tbody>
+      </table>
+    </section>
+
+    <!-- ============================================================ 10 -->
+    <section id="s10">
+      <h2><span class="num">10</span>速查与验证</h2>
+
+      <h3>命令表</h3>
+      <table>
+        <thead><tr><th>命令</th><th>做什么</th><th>阻塞点</th></tr></thead>
+        <tbody>
+          <tr><td><code>vips_info</code></td><td>定位 vips、版本、是否带 dzsave</td><td>起 <code>vips --version</code></td></tr>
+          <tr><td><code>pick_image</code></td><td>系统文件对话框 → 绝对路径</td><td>用户操作</td></tr>
+          <tr><td><code>prepare_image</code></td><td>缓存命中或切片</td><td><strong>几分钟</strong>（spawn_blocking）</td></tr>
+          <tr><td><code>cancel_slicing</code></td><td>杀掉正在跑的 vips 子进程</td><td>—</td></tr>
+          <tr><td><code>cache_stats</code></td><td>缓存总字节 + 图片数</td><td>递归遍历目录</td></tr>
+          <tr><td><code>clear_cache</code></td><td>删掉整个 tiles 根目录</td><td>递归删除</td></tr>
+          <tr><td><code>load_annotations</code></td><td>读源图旁的 sidecar</td><td>磁盘 IO（spawn_blocking）</td></tr>
+          <tr><td><code>save_annotations</code></td><td>写 sidecar，或退回应用数据目录</td><td>磁盘 IO（spawn_blocking）</td></tr>
+          <tr><td><code>export_regions_csv</code></td><td>写 CSV（带 BOM）</td><td>保存对话框 + 写盘</td></tr>
+          <tr><td><code>export_crops</code></td><td>逐框 <code>vips extract_area</code></td><td>每框一次进程</td></tr>
+        </tbody>
+      </table>
+
+      <h3>事件表</h3>
+      <table>
+        <thead><tr><th>事件</th><th>载荷</th><th>什么时候发</th></tr></thead>
+        <tbody>
+          <tr><td><code>vips-status</code></td><td><code>{ available, version, path, hasDzsave }</code></td><td>启动自检一次（前端还要主动拉一次兜底）</td></tr>
+          <tr><td><code>tile-progress</code></td><td><code>{ id, percent, tilesDone, tilesTotal, phase }</code></td><td>切片中：vips 进度 + 数文件，两条并行</td></tr>
+          <tr><td><code>crop-progress</code></td><td><code>{ done, total }</code></td><td>每裁完一个框</td></tr>
+        </tbody>
+      </table>
+
+      <h3>文件表</h3>
+      <table>
+        <thead><tr><th>路径</th><th>是什么</th></tr></thead>
+        <tbody>
+          <tr><td><code>%LOCALAPPDATA%\com.liuliyi.bigimgpin\tiles\</code></td><td>切片缓存（可再生的数据，所以用 local 而不是漫游的 app data）</td></tr>
+          <tr><td><code>&lt;源图目录&gt;\&lt;图名&gt;.bigimgpin.json</code></td><td>标注。跟着图走，能一起进版本库</td></tr>
+          <tr><td>应用数据目录下的同名 json</td><td>源图目录不可写时的兜底位置</td></tr>
+          <tr><td><code>src-tauri\resources\vips-win64\</code></td><td>随 Windows 包捆绑的 vips（解压后约 150 MB，不进仓库）</td></tr>
+        </tbody>
+      </table>
+
+      <h3>怎么验证改动</h3>
+      <p>命令都在仓库根或 <code>src-tauri/</code> 下跑:</p>
+      <pre><code>npx vue-tsc --noEmit        # 前端类型检查（前端没有测试框架,这是最轻的验证）
+cargo test                  # Rust 单测（在 src-tauri/ 下）
+cargo test cache_key_changes_with_slice_params   # 单跑一个
+npm run dev                 # tauri dev，起来真用一遍</code></pre>
+
+      <div class="note">
+        <div class="note__t">界面改动不等于只能靠人点</div>
+        <p>
+          WebView2 支持 <code>--remote-debugging-port</code>,连上 CDP 之后鼠标键盘事件走的是 Chromium
+          完整输入管线 —— 拖手柄、Ctrl 多选、按 Delete 都验得了。断言读 DOM / 组件状态 / 磁盘文件,
+          比截图可靠（本机 125% DPI,截图本来就不可信）。够不着的只有系统画的对话框和审美判断。
+        </p>
+      </div>
+
+      <hr class="soft">
+      <p class="dim" style="font-size:13px">
+        这份文档里的代码是从仓库里贴出来的（<code>文件:行号</code> 对应当时的版本）,
+        路径、DZI 描述符和目录结构取自本机真实缓存。
+        配色取自 <code>src/styles.css</code> 的令牌 —— 界面零彩度、颜色只出现在数据上:
+        在这里,数据就是上面那些代码和流程图。
+      </p>
+    </section>
+  </main>
+</div>
+
+<button class="toggle" id="theme">切换主题</button>
+
+<script>
+/* ------------------------------------------------------------------ 主题 */
+;(function () {
+  var root = document.documentElement
+  var saved = localStorage.getItem('readme.theme')
+  var sys = window.matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark'
+  root.dataset.theme = saved || sys
+  document.getElementById('theme').addEventListener('click', function () {
+    var next = root.dataset.theme === 'dark' ? 'light' : 'dark'
+    root.dataset.theme = next
+    localStorage.setItem('readme.theme', next)
+  })
+})()
+
+/* ------------------------------------------------------ 极简语法高亮
+ * 单遍替换:注释 → 字符串 → 数字 → 关键字。顺序和「一遍扫过」是关键,
+ * 换个顺序就会在字符串里面找注释(比如 "http://…" 里的 //)。
+ * 只上三种颜色:关键字、字符串、注释。别的都是灰。
+ */
+;(function () {
+  var KEYWORDS = [
+    // Rust
+    'as','async','await','break','const','continue','crate','dyn','else','enum','extern',
+    'false','fn','for','if','impl','in','let','loop','match','mod','move','mut','pub','ref',
+    'return','self','Self','static','struct','super','trait','true','type','unsafe','use',
+    'where','while','bool','str','usize','u32','u64','f64','i32','String','Vec','Option',
+    'Result','Some','None','Ok','Err','Path','PathBuf','HashMap','Mutex','Arc','AtomicBool',
+    'Command','Child','Stdio','BufReader','Runtime','Vec','slice',
+    // TS / JS
+    'import','export','from','function','new','class','interface','extends','implements',
+    'typeof','instanceof','undefined','null','this','string','number','boolean','void',
+    'Promise','Set','Map','type','as','const','let',
+    // 命令行
+    'vips','vipsheader','npm','npx','cargo','git','brew','node','cd'
+  ]
+  var KW = new Set(KEYWORDS)
+  var RE = new RegExp(
+    '(\\/\\/[^\\n]*|\\/\\*[\\s\\S]*?\\*\\/|#\\[[^\\]]*\\]|#[^\\n]*)' + // 1 注释 / 属性
+    '|("(?:[^"\\\\\\n]|\\\\.)*"|\'(?:[^\'\\\\\\n]|\\\\.)*\')' +      // 2 字符串
+    '|\\b(\\d[\\d_.]*)\\b' +                                          // 3 数字
+    '|\\b([A-Za-z_][A-Za-z0-9_]*)\\b',                                // 4 标识符
+    'g'
+  )
+
+  function esc(s) {
+    return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+  }
+
+  document.querySelectorAll('pre > code').forEach(function (block) {
+    // 画出来的示意图（进程边界、目录树）不上色:那里没有「代码」,染几个词只是噪音
+    if (block.parentElement.hasAttribute('data-plain')) return
+
+    var src = block.textContent
+    var out = ''
+    var last = 0
+    var m
+    RE.lastIndex = 0
+    while ((m = RE.exec(src)) !== null) {
+      out += esc(src.slice(last, m.index))
+      var text = esc(m[0])
+      if (m[1]) out += '<span class="tok-c">' + text + '</span>'
+      else if (m[2]) out += '<span class="tok-s">' + text + '</span>'
+      else if (m[3]) out += '<span class="tok-n">' + text + '</span>'
+      else if (KW.has(m[4])) out += '<span class="tok-k">' + text + '</span>'
+      else out += text
+      last = m.index + m[0].length
+    }
+    out += esc(src.slice(last))
+    block.innerHTML = out
+  })
+})()
+
+/* ------------------------------------------------------------ 金字塔构建器 */
+;(function () {
+  var bw = document.getElementById('bw')
+  var bh = document.getElementById('bh')
+  var bt = document.getElementById('bt')
+  var sum = document.getElementById('bsum')
+  var box = document.getElementById('levels')
+
+  /* 与 src-tauri/src/vips.rs 的 expected_tile_count 同一套算法:
+     每一级尺寸是上一级的一半、向上取整,直到 1×1。
+     磁盘上的目录号:0 = 1×1,最大号 = 全分辨率。 */
+  function levels(w, h, tile) {
+    var maxLevel = Math.ceil(Math.log2(Math.max(w, h)))
+    var rows = []
+    var total = 0
+    for (var level = 0; level <= maxLevel; level++) {
+      var scale = Math.pow(2, maxLevel - level)
+      var lw = Math.ceil(w / scale)
+      var lh = Math.ceil(h / scale)
+      var cols = Math.ceil(lw / tile)
+      var lines = Math.ceil(lh / tile)
+      total += cols * lines
+      rows.push({ level: level, w: lw, h: lh, cols: cols, rows: lines, count: cols * lines, total: total })
+    }
+    return { rows: rows, total: total, maxLevel: maxLevel }
+  }
+
+  function draw(level) {
+    var cell = Math.max(2, Math.min(13, Math.floor(300 / Math.max(level.cols, level.rows))))
+    var gap = cell >= 6 ? 1 : 0
+    var cv = document.createElement('canvas')
+    cv.width = level.cols * cell
+    cv.height = level.rows * cell
+    var ctx = cv.getContext('2d')
+    var full = level.level === maxLevelNow
+    ctx.fillStyle = full ? '#d9a441' : '#4a7fb5'
+    for (var y = 0; y < level.rows; y++) {
+      for (var x = 0; x < level.cols; x++) {
+        ctx.fillRect(x * cell, y * cell, cell - gap, cell - gap)
+      }
+    }
+    return cv
+  }
+
+  var maxLevelNow = 0
+
+  function fmt(n) { return n.toLocaleString('en-US') }
+
+  function render() {
+    var w = Math.max(1, Math.min(2000000, parseInt(bw.value, 10) || 1))
+    var h = Math.max(1, Math.min(2000000, parseInt(bh.value, 10) || 1))
+    var tile = parseInt(bt.value, 10) || 1024
+
+    var result = levels(w, h, tile)
+    maxLevelNow = result.maxLevel
+
+    sum.innerHTML =
+      fmt(result.rows.length) + ' 级 · 共 <b>' + fmt(result.total) + '</b> 张瓦片' +
+      ' · 全分辨率那级是 ' +
+      fmt(result.rows[result.maxLevel].cols) + '×' + fmt(result.rows[result.maxLevel].rows) +
+      ' = ' + fmt(result.rows[result.maxLevel].count) + ' 张'
+
+    box.innerHTML = ''
+    result.rows.forEach(function (level) {
+      var row = document.createElement('div')
+      row.className = 'lv' +
+        (level.level === result.maxLevel ? ' lv--full' : '') +
+        (level.count === 1 && level.level !== result.maxLevel ? ' lv--tiny' : '')
+
+      var n = document.createElement('div')
+      n.className = 'lv__n'
+      n.textContent = level.level + '/'
+
+      var px = document.createElement('div')
+      px.className = 'lv__px'
+      px.textContent = fmt(level.w) + ' × ' + fmt(level.h) + ' px'
+
+      var count = document.createElement('div')
+      count.className = 'lv__count'
+      count.textContent = level.cols + '×' + level.rows + ' = ' + fmt(level.count) + ' 张'
+
+      var holder = document.createElement('div')
+      holder.className = 'lv__canvas'
+      holder.appendChild(draw(level))
+
+      row.append(n, px, count, holder)
+      box.appendChild(row)
+    })
+  }
+
+  ;[bw, bh].forEach(function (el) { el.addEventListener('input', render) })
+  bt.addEventListener('change', render)
+  render()
+})()
+
+/* -------------------------------------------------------------- 目录高亮 */
+;(function () {
+  var links = Array.prototype.slice.call(document.querySelectorAll('#toc a'))
+  var sections = links.map(function (a) { return document.querySelector(a.getAttribute('href')) })
+  var visible = new Set()
+
+  var io = new IntersectionObserver(function (entries) {
+    entries.forEach(function (e) {
+      if (e.isIntersecting) visible.add(e.target)
+      else visible.delete(e.target)
+    })
+    // 取当前可见的最后一个:滚动方向上「正在读」的那一节
+    var current = null
+    for (var i = 0; i < sections.length; i++) {
+      if (visible.has(sections[i])) current = sections[i]
+    }
+    links.forEach(function (a) {
+      a.classList.toggle('on', current !== null && a.getAttribute('href') === '#' + current.id)
+    })
+  }, { rootMargin: '-10% 0px -70% 0px' })
+
+  sections.forEach(function (s) { if (s) io.observe(s) })
+})()
+</script>
+</body>
+</html>

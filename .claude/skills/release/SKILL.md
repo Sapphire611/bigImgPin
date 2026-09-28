@@ -11,6 +11,14 @@ description: Use when publishing a new bigImgPin version (发版/发布/出新�
 
 1. **版本号改了没** —— `src-tauri/tauri.conf.json` 的 `version`。
    客户端就是拿它跟云端比大小的,**忘了改 = 所有客户端都认为没新版**,而且不会报任何错。
+   别凭记忆确认,直接比这两个数:
+
+   ```bash
+   node -p "require('./src-tauri/tauri.conf.json').version"         # 将要发的
+   gh release list --limit 1 --json tagName --jq '.[0].tagName'     # 已经发的
+   ```
+
+   一样就说明忘了改。
 2. **签名私钥在不在** —— `~/.tauri/bigimgpin.key`(不在仓库里,丢了只能让用户重装)。
 3. **gh 能用** —— `gh auth status`。没装:`winget install --id GitHub.cli`(装完要新开终端,
    或刷新 PATH)。
@@ -51,7 +59,9 @@ Release 没被标成 Latest(比如误勾了 prerelease),或者上传时资产名
 **刚重传过资产、要确认内容对不对时,绕开它读资产本身**:
 
 ```bash
-ASSET=$(gh api repos/Sapphire611/bigImgPin/releases/tags/v0.2.0 \
+# tag 从 tauri.conf.json 推导 —— 手写 v0.2.x 的话,发完下一版这条命令就悄悄查错 tag 了
+TAG="v$(node -p "require('./src-tauri/tauri.conf.json').version")"
+ASSET=$(gh api "repos/Sapphire611/bigImgPin/releases/tags/$TAG" \
   --jq '.assets[] | select(.name=="latest.json") | .id')
 gh api "repos/Sapphire611/bigImgPin/releases/assets/$ASSET" -H "Accept: application/octet-stream"
 ```
@@ -67,7 +77,7 @@ gh api "repos/Sapphire611/bigImgPin/releases/assets/$ASSET" -H "Accept: applicat
 2. 静默装它:
 
    ```bash
-   MSYS_NO_PATHCONV=1 ./bigImgPin_0.1.0_x64-setup.exe /S
+   MSYS_NO_PATHCONV=1 ./bigImgPin_<旧版本>_x64-setup.exe /S   # 版本号换成你留的那一份,别照抄
    ```
 
    **`MSYS_NO_PATHCONV=1` 不能省** —— 否则 git bash 把 `/S` 当路径转换掉,会弹出安装向导。

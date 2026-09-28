@@ -1,0 +1,1112 @@
+<!DOCTYPE html>
+<!--
+  代码走读文档模板。
+
+  用法:复制到目标位置,然后按顺序做四件事 ——
+  1. 改 title 和 .meta 里的 chips(版本从 package.json / Cargo.toml 读,别写「最新」)
+  2. 改 #toc 的章节名,和下面每个 section 的 id 对应(必须是 s1…sN,脚本靠它高亮当前节)
+  3. 按正文里的「示例块 A…G」逐块替换;每个示例旁边写了它适合承载什么
+  4. 换掉文件头 style 里的配色令牌(来自本项目的 styles.css)
+  写完必须验证,而且验证不等于截图 —— 见 .claude/skills/code-tour/SKILL.md 第五节。
+
+  几条不要动的:单文件、离线、不引 CDN 和字体库;代码块里的 < 与 & 必须写成 &lt; 和 &amp;;
+  相邻的两个 (function(){})() 之间必须有分号。
+-->
+<html lang="zh-CN" data-theme="dark">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>项目名 · 实现说明</title>
+<style>
+/*
+ * 配色取自项目自己的设计令牌(src/styles.css)。换项目时第一个要改的就是这一段:
+ * 没有令牌,就按题材找理由,别用「深色 + 紫色」那种默认皮肤。
+ * 这里之所以照抄那套令牌,理由是:
+ * 界面零彩度,颜色只出现在「数据」上 —— 在这份文档里,数据就是代码和流程图。
+ * 于是:框架、边框、正文全中性灰;琥珀(--guide)留给跨边界/重点;蓝(--tile)留给瓦片。
+ * 不引 CDN、不引字体、不引高亮库:双击就能离线打开,和这个项目本身的立场一致。
+ */
+:root,
+:root[data-theme='dark'] {
+  color-scheme: dark;
+  --stage: #17181a;
+  --panel: #1f2022;
+  --raise: #26272a;
+  --border: #37383b;
+  --border-strong: #6a6c72;
+  --text: #dcdde0;
+  --text-dim: #a5a8ae;
+  --text-faint: #878a90;
+  --solid: #dcdde0;
+  --solid-text: #17181a;
+  --guide: #ffd666;
+  --guide-dim: #d9a441;
+  --tile: #6fa8dc;
+  --tile-dim: #4a7fb5;
+  --danger: #e2958f;
+  --ok: #86c78f;
+  --code-bg: #1b1c1e;
+  --font-ui: -apple-system, BlinkMacSystemFont, 'Segoe UI Variable Text', 'Segoe UI',
+    'PingFang SC', 'Microsoft YaHei UI', 'Microsoft YaHei', Roboto, sans-serif;
+  --font-mono: ui-monospace, 'Cascadia Mono', Consolas, SFMono-Regular, Menlo, monospace;
+}
+:root[data-theme='light'] {
+  color-scheme: light;
+  --stage: #e9eaec;
+  --panel: #fafafb;
+  --raise: #ffffff;
+  --border: #d7d9dc;
+  --border-strong: #8b9098;
+  --text: #1c1d1f;
+  --text-dim: #52555c;
+  --text-faint: #656870;
+  --solid: #26282c;
+  --solid-text: #fafafb;
+  --guide: #946414;
+  --guide-dim: #7d5a14;
+  --tile: #2f6ea8;
+  --tile-dim: #4a7fb5;
+  --danger: #a3231b;
+  --ok: #2c6e3a;
+  --code-bg: #f2f3f5;
+}
+
+* { box-sizing: border-box; }
+
+html { scroll-behavior: smooth; }
+
+body {
+  margin: 0;
+  background: var(--stage);
+  color: var(--text);
+  font-family: var(--font-ui);
+  font-size: 15px;
+  line-height: 1.75;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* ------------------------------------------------------------------ 布局 */
+
+.shell {
+  display: grid;
+  grid-template-columns: 272px minmax(0, 1fr);
+  align-items: start;
+  max-width: 1360px;
+  margin: 0 auto;
+  gap: 0 44px;
+}
+
+.side {
+  position: sticky;
+  top: 0;
+  max-height: 100vh;
+  overflow-y: auto;
+  padding: 28px 0 40px 24px;
+  border-right: 1px solid var(--border);
+  font-size: 13px;
+}
+
+.side__title {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--text-faint);
+  margin: 0 0 14px;
+}
+
+.side ol { list-style: none; margin: 0; padding: 0; }
+
+.side a {
+  display: block;
+  padding: 4px 10px 4px 0;
+  color: var(--text-dim);
+  text-decoration: none;
+  border-right: 2px solid transparent;
+  transition: color 0.12s;
+}
+.side a:hover { color: var(--text); }
+.side a .n {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--text-faint);
+  margin-right: 8px;
+}
+.side a.on { color: var(--text); }
+.side a.on .n { color: var(--guide); }
+
+.side__foot {
+  margin-top: 22px;
+  padding-top: 16px;
+  border-top: 1px solid var(--border);
+  color: var(--text-faint);
+  font-size: 12px;
+  line-height: 1.9;
+}
+.side__foot code { font-size: 11px; }
+
+main {
+  padding: 28px 24px 120px 0;
+  min-width: 0;
+}
+
+/* ------------------------------------------------------------------ 排版 */
+
+h1 {
+  font-size: 30px;
+  line-height: 1.3;
+  font-weight: 600;
+  margin: 8px 0 10px;
+  letter-spacing: -0.01em;
+}
+
+.lede { color: var(--text-dim); font-size: 15px; margin: 0 0 20px; max-width: 70ch; }
+
+.meta { display: flex; flex-wrap: wrap; gap: 6px; margin: 0 0 34px; }
+
+.chip {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--text-dim);
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  padding: 2px 7px;
+  background: var(--panel);
+}
+.chip.hot { border-color: var(--guide-dim); color: var(--guide); }
+.chip.tile { border-color: var(--tile-dim); color: var(--tile); }
+
+h2 {
+  font-family: var(--font-mono);
+  font-size: 17px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  margin: 0 0 18px;
+  padding-bottom: 10px;
+  border-bottom: 1px solid var(--border);
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+  scroll-margin-top: 20px;
+}
+h2 .num {
+  font-size: 12px;
+  color: var(--guide);
+  border: 1px solid var(--guide-dim);
+  border-radius: 3px;
+  padding: 0 5px;
+  flex-shrink: 0;
+}
+
+h3 {
+  font-size: 15px;
+  font-weight: 600;
+  margin: 30px 0 10px;
+}
+
+h4 {
+  font-family: var(--font-mono);
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-dim);
+  margin: 22px 0 8px;
+}
+
+section { margin-bottom: 64px; }
+
+p { margin: 0 0 14px; max-width: 78ch; }
+
+ul, ol { max-width: 78ch; padding-left: 22px; }
+li { margin: 5px 0; }
+
+strong { font-weight: 600; color: var(--text); }
+em { font-style: normal; color: var(--guide); }
+
+a { color: var(--tile); }
+
+code {
+  font-family: var(--font-mono);
+  font-size: 12.5px;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  padding: 0.5px 4px;
+  color: var(--text-dim);
+}
+
+/* ------------------------------------------------------------------ 代码块 */
+
+figure { margin: 0 0 20px; }
+
+pre {
+  margin: 0;
+  background: var(--code-bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 14px 16px;
+  overflow-x: auto;
+  font-family: var(--font-mono);
+  font-size: 12.5px;
+  line-height: 1.72;
+  tab-size: 4;
+}
+pre code {
+  background: none;
+  border: 0;
+  padding: 0;
+  font-size: inherit;
+  color: var(--text);
+  white-space: pre;
+}
+figcaption {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--text-faint);
+  margin-bottom: 6px;
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+}
+figcaption b { color: var(--text-dim); font-weight: 500; }
+
+/* 高亮 token:关键字蓝、字符串琥珀、注释暗 —— 只有三种颜色 */
+.tok-k { color: var(--tile); }
+.tok-s { color: var(--guide-dim); }
+.tok-c { color: var(--text-faint); font-style: italic; }
+.tok-n { color: var(--text-dim); }
+.tok-a { color: var(--ok); }
+
+/* ------------------------------------------------------------------ 提示块 */
+
+.note {
+  border-left: 2px solid var(--guide);
+  background: var(--panel);
+  padding: 12px 16px;
+  margin: 0 0 20px;
+  border-radius: 0 4px 4px 0;
+}
+.note__t {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  color: var(--guide);
+  text-transform: uppercase;
+  margin-bottom: 4px;
+}
+.note p:last-child, .note ul:last-child { margin-bottom: 0; }
+
+.note.danger { border-left-color: var(--danger); }
+.note.danger .note__t { color: var(--danger); }
+.note.plain { border-left-color: var(--border-strong); }
+.note.plain .note__t { color: var(--text-faint); }
+
+/* ------------------------------------------------------------------ 表格 */
+
+table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+  margin: 0 0 22px;
+}
+th, td {
+  text-align: left;
+  padding: 8px 12px 8px 0;
+  border-bottom: 1px solid var(--border);
+  vertical-align: top;
+}
+th {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--text-faint);
+  font-weight: 500;
+  white-space: nowrap;
+}
+td:first-child { white-space: nowrap; }
+td code { font-size: 12px; }
+
+/* ------------------------------------------------------------------ 泳道序列图 */
+
+.seq {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--panel);
+  padding: 0 0 18px;
+  margin: 0 0 26px;
+  overflow: hidden;
+}
+.seq__head, .seq__row {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  column-gap: 10px;
+  padding: 0 14px;
+}
+.seq__head {
+  padding-top: 14px;
+  padding-bottom: 10px;
+  border-bottom: 1px solid var(--border);
+  margin-bottom: 4px;
+}
+.seq__lane {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  letter-spacing: 0.06em;
+  color: var(--text-faint);
+  text-transform: uppercase;
+}
+.seq__lane i { font-style: normal; color: var(--text-dim); }
+
+.seq__card {
+  background: var(--raise);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 6px 10px;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--text-dim);
+  font-family: var(--font-mono);
+  overflow-wrap: anywhere;
+}
+.seq__card.hot { border-color: var(--guide-dim); color: var(--guide); }
+.seq__card.tile { border-color: var(--tile-dim); color: var(--tile); }
+
+/* 箭头行:一条线 + 一个箭头;方向由 --d 决定哪头有箭头 */
+.seq__arrow {
+  position: relative;
+  height: 30px;
+  margin: 0 14px;
+}
+.seq__arrow::before {
+  content: '';
+  position: absolute;
+  top: 15px;
+  height: 1px;
+  background: var(--border-strong);
+  left: var(--x1, 0%);
+  right: var(--x2, 0%);
+}
+.seq__arrow::after {
+  content: '';
+  position: absolute;
+  top: 11px;
+  width: 0;
+  height: 0;
+  border-top: 5px solid transparent;
+  border-bottom: 5px solid transparent;
+}
+.seq__arrow[data-dir='r']::after {
+  border-left: 7px solid var(--border-strong);
+  right: var(--x2, 0%);
+}
+.seq__arrow[data-dir='l']::after {
+  border-right: 7px solid var(--border-strong);
+  left: var(--x1, 0%);
+}
+/* 标签放在线的**中点**上,而不是容器的中点上:箭头只跨两三条泳道时,
+   容器中点会落在空泳道里,标签就飘在线外面了。
+   线的中点 = 50% + (x1 - x2) / 2 */
+.seq__arrow span {
+  position: absolute;
+  top: 3px;
+  left: calc(50% + (var(--x1, 0%) - var(--x2, 0%)) / 2);
+  transform: translateX(-50%);
+  background: var(--panel);
+  padding: 0 8px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--text-faint);
+  white-space: nowrap;
+}
+.seq__arrow.hot span { color: var(--guide); }
+.seq__foot {
+  padding: 4px 14px 0;
+  font-size: 12px;
+  color: var(--text-dim);
+}
+
+/* ------------------------------------------------------------------ 金字塔可视化 */
+
+.builder {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--panel);
+  padding: 16px 18px 6px;
+  margin: 0 0 22px;
+}
+.builder__bar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 18px;
+  align-items: center;
+  padding-bottom: 14px;
+  border-bottom: 1px solid var(--border);
+  margin-bottom: 16px;
+}
+.builder__bar label {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--text-faint);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.builder__bar input, .builder__bar select {
+  width: 92px;
+  background: var(--code-bg);
+  border: 1px solid var(--border-strong);
+  border-radius: 4px;
+  color: var(--text);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  padding: 4px 6px;
+}
+.builder__bar select { width: 108px; }
+.builder__sum {
+  margin-left: auto;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--text-dim);
+}
+.builder__sum b { color: var(--guide); font-weight: 600; }
+
+.levels { display: flex; flex-direction: column; gap: 2px; padding-bottom: 8px; }
+.lv {
+  display: grid;
+  grid-template-columns: 74px 170px 112px minmax(0, 1fr);
+  align-items: center;
+  gap: 12px;
+  padding: 4px 0;
+}
+.lv__n {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--text-faint);
+}
+.lv__px { font-family: var(--font-mono); font-size: 12px; color: var(--text-dim); }
+.lv__count { font-family: var(--font-mono); font-size: 12px; color: var(--text-dim); }
+.lv__canvas { line-height: 0; }
+.lv--full .lv__n, .lv--full .lv__count { color: var(--guide); }
+.lv--tiny { opacity: 0.62; }
+canvas { image-rendering: pixelated; }
+
+/* ------------------------------------------------------------------ 杂项 */
+
+.cols2 {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  gap: 0 26px;
+}
+
+.card {
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--panel);
+  padding: 14px 16px 2px;
+  margin-bottom: 16px;
+}
+.card h4 { margin-top: 0; }
+
+.steps { counter-reset: s; }
+
+.hop {
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--panel);
+  margin: 0 0 22px;
+  overflow: hidden;
+}
+.hop__h {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  padding: 11px 16px;
+  border-bottom: 1px solid var(--border);
+  flex-wrap: wrap;
+}
+.hop__n {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--solid-text);
+  background: var(--solid);
+  border-radius: 3px;
+  padding: 1px 6px;
+  flex-shrink: 0;
+}
+.hop__t { font-weight: 600; font-size: 14px; }
+.hop__where {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--text-faint);
+  margin-left: auto;
+  white-space: nowrap;
+}
+.hop__b { padding: 14px 16px 0; }
+.hop__b > p:last-child { margin-bottom: 14px; }
+.hop pre { font-size: 12px; }
+
+.diagram {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--panel);
+  padding: 18px;
+  margin: 0 0 24px;
+  overflow-x: auto;
+}
+
+.toggle {
+  position: fixed;
+  right: 18px;
+  bottom: 18px;
+  z-index: 50;
+  background: var(--panel);
+  border: 1px solid var(--border-strong);
+  color: var(--text-dim);
+  border-radius: 999px;
+  padding: 7px 15px;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  cursor: pointer;
+}
+.toggle:hover { color: var(--text); border-color: var(--solid); }
+
+.kv { font-family: var(--font-mono); font-size: 12px; }
+.dim { color: var(--text-faint); }
+.hot { color: var(--guide); }
+.tilec { color: var(--tile); }
+
+hr.soft {
+  border: 0;
+  border-top: 1px dashed var(--border);
+  margin: 30px 0;
+}
+
+@media (max-width: 1000px) {
+  .shell { grid-template-columns: 1fr; }
+  .side { position: static; max-height: none; border-right: 0; border-bottom: 1px solid var(--border); padding: 18px 20px; }
+  main { padding: 22px 20px 100px; }
+  .lv { grid-template-columns: 60px 1fr; }
+  .lv__canvas { grid-column: 2; }
+}
+</style>
+</head>
+<body>
+<div class="shell">
+  <nav class="side">
+    <p class="side__title">目录</p>
+    <ol id="toc">
+      <li><a href="#s1"><span class="n">01</span>谁在跑：所有执行体</a></li>
+      <li><a href="#s2"><span class="n">02</span>核心概念（先讲清楚它是什么）</a></li>
+      <li><a href="#s3"><span class="n">03</span>全链路：一次操作的全过程</a></li>
+      <li><a href="#s4"><span class="n">04</span>机制一（缓存 / 状态 / 协议…）</a></li>
+      <li><a href="#s5"><span class="n">05</span>机制二</a></li>
+      <li><a href="#s6"><span class="n">06</span>机制三</a></li>
+      <li><a href="#s7"><span class="n">07</span>机制四</a></li>
+      <li><a href="#s8"><span class="n">08</span>机制五</a></li>
+      <li><a href="#s9"><span class="n">09</span>看着像 bug 的故意设计</a></li>
+      <li><a href="#s10"><span class="n">10</span>速查与验证</a></li>
+    </ol>
+    <div class="side__foot">
+      代码块标题里的 <code>文件:行号</code> 对应仓库当前版本。<br>
+      文中的数字、路径、目录结构都是实测或按源码公式现算的。
+    </div>
+  </nav>
+
+  <main>
+    <h1>项目名 · 实现说明</h1>
+    <p class="lede">
+      一句话说清这份文档要回答什么。写法建议:「从『用户做了 X』到『Y 落在磁盘上』,
+      这份文档把这条链路上的每一跳、每一跳的代码、以及不这么写就会出事的地方摊开。」
+    </p>
+    <div class="meta">
+      <span class="chip">主框架 + 版本</span>
+      <span class="chip">后端语言</span>
+      <span class="chip">前端框架</span>
+      <span class="chip">关键第三方</span>
+      <span class="chip hot">最容易误解的那条前提（加粗强调）</span>
+      <span class="chip tile">版本号（从 package.json / Cargo.toml 读，别写「最新」）</span>
+    </div>
+
+    <!-- ============================================================ 01 -->
+    <section id="s1">
+      <h2><span class="num">01</span>谁在跑：所有执行体</h2>
+
+      <p>
+        这一节的作用是<strong>先把读者脑子里的错误模型打掉</strong>。典型写法:「这是最容易带着 XX 直觉读错的地方。
+        在 XX 里做这件事是一个进程一次调用,这里不是:同一时刻有 N 个执行体,它们之间靠管道、文件和 HTTP 说话。」
+      </p>
+
+      <!-- 示例块 A：结构示意图。用 data-plain 跳过高亮（见 SKILL.md 第六节第 6 条） -->
+      <figure>
+        <figcaption><b>进程与边界</b><span>宿主进程 = XXX</span></figcaption>
+        <pre data-plain><code>┌─ 主进程 ────────────────────┐
+│  ┌── 子执行体 A ──┐          │
+│  │               │◄────────►│  ← 边界写清是 IPC 还是 HTTP
+│  └───────────────┘          │
+└──────────┬──────────────────┘
+           ▼
+   外部工具 / 磁盘 / 数据库</code></pre>
+      </figure>
+
+      <div class="note">
+        <div class="note__t">关键前提</div>
+        <p>把「最容易让读者套错直觉」的那条单独拎出来（比如「它不是链接进来的库,而是一个外部进程」）。</p>
+      </div>
+
+      <h3>给 XX 背景的对照表</h3>
+      <!-- 示例块 B：概念对照表。读者最熟的生态放右边,差别那列写「会咬人的地方」 -->
+      <table>
+        <thead><tr><th>这里的东西</th><th>你熟悉的那套里对应什么</th><th>差别在哪</th></tr></thead>
+        <tbody>
+          <tr><td><code>A</code></td><td>概念 B</td><td>最容易踩空的一处</td></tr>
+          <tr><td><code>C</code></td><td>概念 D</td><td>最容易踩空的一处</td></tr>
+        </tbody>
+      </table>
+
+      <h3>代码分布</h3>
+      <!-- 示例块 C：两栏文件表,一个文件一句话。别贴目录树,读者要看的是「哪个文件负责什么」 -->
+      <div class="cols2">
+        <div>
+          <h4>前端</h4>
+          <table><tbody>
+            <tr><td><code>path/a.ts</code></td><td class="dim">一句话职责</td></tr>
+          </tbody></table>
+        </div>
+        <div>
+          <h4>后端</h4>
+          <table><tbody>
+            <tr><td><code>path/b.rs</code></td><td class="dim">一句话职责</td></tr>
+          </tbody></table>
+        </div>
+      </div>
+    </section>
+
+    <!-- ============================================================ 02 -->
+    <section id="s2">
+      <h2><span class="num">02</span>核心概念（先讲清楚它是什么）</h2>
+
+      <p>
+        把主链路里最陌生的那个概念先讲明白 —— 否则后面出现的每个术语读者都要停下来猜。
+        讲的时候给<strong>它落在磁盘/内存上到底长什么样</strong>,而不是给定义。
+      </p>
+
+      <!-- 示例块 D：真实产物。直接从磁盘/接口/数据库里抓一份真的贴上来,比画示意图可信十倍 -->
+      <figure>
+        <figcaption><b>真实产物（从哪抓的）</b><span>一句话说明</span></figcaption>
+        <pre data-plain><code>把真实文件内容/真实目录列表/真实响应体贴在这里。
+不要手写「示意版」—— 手写的和真的有差别时,读者学到的就是错的。</code></pre>
+      </figure>
+
+      <div class="note">
+        <div class="note__t">反直觉的地方</div>
+        <p>每个概念都有那个「和直觉相反」的点:索引从 0 开始且最小、坐标系原点在左上、时间是倒着存的…… 单独标出来。</p>
+      </div>
+
+      <h3>亲手算一遍</h3>
+      <p>
+        凡是文档里出现的「共 N 级 / M 个 / K 张」这类数字,都别硬编码:
+        <strong>用源码里那段公式现算</strong>,并让读者能改输入看变化。这样文档自带一次交叉验证。
+      </p>
+
+      <!-- 示例块 E：数据驱动的可视化。公式照抄源码,画在 canvas 上,输入框改了立刻重算。
+           这一块很容易被跳过 —— 但它是「让读者相信数字」的最短路径。 -->
+      <div class="builder">
+        <div class="builder__bar">
+          <label>输入一 <input id="bw" type="number" value="41041" min="1" max="2000000" step="1"></label>
+          <label>输入二 <input id="bh" type="number" value="49841" min="1" max="2000000" step="1"></label>
+          <label>参数
+            <select id="bt">
+              <option value="256">256</option>
+              <option value="512">512</option>
+              <option value="1024" selected>1024</option>
+              <option value="2048">2048</option>
+            </select>
+          </label>
+          <div class="builder__sum" id="bsum"></div>
+        </div>
+        <div class="levels" id="levels"></div>
+      </div>
+      <p class="dim" style="font-size:13px">
+        每行一句话说明方块代表什么、顺序按什么排。公式与 <code>源文件:行号</code> 里的那段一致。
+      </p>
+    </section>
+
+    <!-- ============================================================ 03 -->
+    <section id="s3">
+      <h2><span class="num">03</span>全链路：一次操作的全过程</h2>
+
+      <p>先给全景,再逐跳看代码。竖着读:<strong>一条线是一次调用,卡片是「在谁那里发生了什么」。</strong></p>
+
+      <!-- 示例块 F：泳道序列图。
+           泳道数按项目定,一般 3–4 条:前端 / 边界 / 后端 / 外部系统。
+           每条箭头 = 一次跨边界调用。箭头行用 style="--x1:..;--x2:.." 控制线的左右两端,
+           坐标是「泳道边界」的百分比:4 条泳道就是 0/25/50/75/100。
+           箭头上的标签放在线中点(脚本/样式会自动算),别手写 left。 -->
+      <div class="seq">
+        <div class="seq__head">
+          <div class="seq__lane"><i>①</i> 前端</div>
+          <div class="seq__lane"><i>②</i> 边界</div>
+          <div class="seq__lane"><i>③</i> 后端</div>
+          <div class="seq__lane"><i>④</i> 外部系统 · 磁盘</div>
+        </div>
+
+        <div class="seq__row" style="padding-top:6px">
+          <div class="seq__card">① 用户做了某事</div>
+        </div>
+        <div class="seq__arrow hot" data-dir="r" style="--x1:0%;--x2:50%"><span>调用名（参数） ← 主链路</span></div>
+        <div class="seq__row">
+          <div></div>
+          <div></div>
+          <div class="seq__card hot">② 后端做了什么</div>
+        </div>
+        <div class="seq__arrow" data-dir="r" style="--x1:50%;--x2:0%"><span>发出去的东西</span></div>
+        <div class="seq__row">
+          <div></div><div></div><div></div>
+          <div class="seq__card">③ 外部系统真的干了活</div>
+        </div>
+        <div class="seq__arrow" data-dir="l" style="--x1:50%;--x2:0%"><span>回给后端的信号</span></div>
+        <div class="seq__row">
+          <div></div><div></div>
+          <div class="seq__card">④ 后端收尾</div>
+        </div>
+        <div class="seq__arrow" data-dir="l" style="--x1:0%;--x2:50%"><span>返回给前端的结构体</span></div>
+        <div class="seq__row">
+          <div class="seq__card tile">⑤ 前端拿着它构造视图</div>
+        </div>
+        <div class="seq__arrow tile" data-dir="r" style="--x1:0%;--x2:0%"><span>后续的按需请求（不走 IPC 的那部分）</span></div>
+        <div class="seq__row">
+          <div></div><div></div>
+          <div class="seq__card tile">⑥ 谁在读盘</div>
+          <div class="seq__card tile">真实路径</div>
+        </div>
+        <div class="seq__foot">灰色 = 冷路径（只第一次走）。热路径只有 ①④⑤⑥。</div>
+      </div>
+
+      <h3>逐跳代码</h3>
+
+      <!-- 示例块 G：hop 卡片。这一块的写法最要紧：
+           标题 = 谁做了什么（不是函数名）；右边标 文件:行号；
+           正文 = 这一跳「为什么这么写」；代码 = 真实片段（可节选,但一个字都别改）。
+           跳数控制在 8–14:少于 8 说明还没讲透,多于 14 该拆成两节。 -->
+      <div class="hop">
+        <div class="hop__h"><span class="hop__n">1</span><span class="hop__t">用户点击之后发生的第一件事</span><span class="hop__where">文件:行号</span></div>
+        <div class="hop__b">
+          <p>这一跳在做什么、为什么放在这一层（放别处会怎样）。</p>
+          <figure>
+            <figcaption><b>path/to/file.ts</b><span>函数名</span></figcaption>
+            <pre><code>// 真实代码。注意代码块里的 &lt; 必须写成 &amp;lt;、&amp; 写成 &amp;amp;（见 SKILL.md 第六节）。
+function realCode() {
+  // 段注释照抄,里面往往写着「为什么」
+}</code></pre>
+          </figure>
+          <div class="note plain">
+            <div class="note__t">顺带一提</div>
+            <p>适合放那些「不写也行,但读者会问」的边角:命名约定、为什么放这儿不放那儿。</p>
+          </div>
+        </div>
+      </div>
+
+      <div class="note danger">
+        <div class="note__t">标题写「会咬人的地方」</div>
+        <p>时序陷阱 / 竞态 / 静默失败 / 只在某个平台上出现的差异 —— 用 <code>note danger</code> 标红,这些是文档最值钱的部分。</p>
+      </div>
+    </section>
+
+    <!-- ============================================================ 04-08 -->
+    <section id="s4">
+      <h2><span class="num">04</span>机制一（缓存 / 状态 / 协议…）</h2>
+      <p>
+        每一节讲一个独立机制,内部结构固定为三段:<strong>它解决什么问题 → 关键代码 → 不这么写会怎样</strong>。
+        机制节数量按项目定,3–5 个合适;写不满就把编号删掉,别为了凑数拆开。
+        代码仍然用 <code>figure</code> + <code>figcaption</code> 标 <code>文件:行号</code>。
+      </p>
+      <figure>
+        <figcaption><b>path/to/file</b><span>这段代码的关键决策</span></figcaption>
+        <pre><code>关键代码</code></pre>
+      </figure>
+      <table>
+        <thead><tr><th>防的是什么</th><th>怎么防的</th></tr></thead>
+        <tbody>
+          <tr><td>某个具体的坏情况（崩溃 / 换参数 / 并发）</td><td>对应的那一行代码或那个判断</td></tr>
+        </tbody>
+      </table>
+    </section>
+
+    <section id="s5">
+      <h2><span class="num">05</span>机制二</h2>
+      <p>同样的三段式。适合放「边界与契约」类内容:类型契约、协议、序列化、字段命名。</p>
+    </section>
+
+    <section id="s6">
+      <h2><span class="num">06</span>机制三</h2>
+      <p>适合放「坐标系 / 单位 / 精度」类内容 —— 这类东西的注释里往往埋着最多坑,原样抄过来。</p>
+    </section>
+
+    <section id="s7">
+      <h2><span class="num">07</span>机制四</h2>
+      <p>适合放「状态机 / 撤销 / 生命周期」类内容。写清「谁可以改它」,而不只是「它是什么」。</p>
+    </section>
+
+    <section id="s8">
+      <h2><span class="num">08</span>机制五</h2>
+      <p>适合放「落盘 / 导出 / 持久化」类内容。要点是<strong>实际写到哪个文件、什么格式、什么时候写</strong>。</p>
+    </section>
+
+    <!-- ============================================================ 09 -->
+    <section id="s9">
+      <h2><span class="num">09</span>看着像 bug 的故意设计</h2>
+      <p>这一节是整份文档里被引用最多的地方:每一条都更像「漏了一处处理」,但都是故意的。改动前先看一眼理由。</p>
+      <table>
+        <thead><tr><th>看着像</th><th>其实是</th></tr></thead>
+        <tbody>
+          <tr><td>某处没做校验 / 没夹取 / 没清理</td><td>为什么是故意的,真要用到的地方谁负责兜</td></tr>
+          <tr><td>某个参数值明显不合理</td><td>实测出来的取舍（带上两边各是多少）</td></tr>
+          <tr><td>那段代码在防一个不可能发生的情况</td><td>它真的发生过,或者它防的是「静默出错」而不是「报错」</td></tr>
+        </tbody>
+      </table>
+    </section>
+
+    <!-- ============================================================ 10 -->
+    <section id="s10">
+      <h2><span class="num">10</span>速查与验证</h2>
+
+      <h3>命令表</h3>
+      <table>
+        <thead><tr><th>命令</th><th>做什么</th><th>阻塞点 / 代价</th></tr></thead>
+        <tbody>
+          <tr><td><code>cmd_name</code></td><td>一句话</td><td>耗时的那一步在哪</td></tr>
+        </tbody>
+      </table>
+
+      <h3>事件表</h3>
+      <table>
+        <thead><tr><th>事件</th><th>载荷</th><th>什么时候发</th></tr></thead>
+        <tbody>
+          <tr><td><code>event-name</code></td><td><code>{ 字段 }</code></td><td>触发时机（以及会不会丢）</td></tr>
+        </tbody>
+      </table>
+
+      <h3>文件表</h3>
+      <table>
+        <thead><tr><th>路径</th><th>是什么</th></tr></thead>
+        <tbody>
+          <tr><td><code>绝对或带变量的真实路径</code></td><td>它是什么、为什么放这</td></tr>
+        </tbody>
+      </table>
+
+      <h3>怎么验证改动</h3>
+      <pre><code>本项目现成的机械检查命令（类型检查 / 单测 / 构建）</code></pre>
+
+      <div class="note">
+        <div class="note__t">界面改动不等于只能靠人点</div>
+        <p>
+          写清这个项目能拿什么当证据（CDP 驱动真客户端、断言读 DOM/状态/磁盘）。
+          具体的写法和坑见 <code>.claude/skills/verify/SKILL.md</code>。
+        </p>
+      </div>
+
+      <hr class="soft">
+      <p class="dim" style="font-size:13px">
+        这份文档里的代码是从仓库里贴出来的（<code>文件:行号</code> 对应当时的版本）,
+        路径与数据取自真实运行结果。配色取自项目的设计令牌 —— 界面零彩度、颜色只出现在数据上。
+      </p>
+    </section>
+  </main>
+</div>
+
+<button class="toggle" id="theme">切换主题</button>
+
+<script>
+/* ------------------------------------------------------------------ 主题 */
+;(function () {
+  var root = document.documentElement
+  var saved = localStorage.getItem('readme.theme')
+  var sys = window.matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark'
+  root.dataset.theme = saved || sys
+  document.getElementById('theme').addEventListener('click', function () {
+    var next = root.dataset.theme === 'dark' ? 'light' : 'dark'
+    root.dataset.theme = next
+    localStorage.setItem('readme.theme', next)
+  })
+})()
+
+/* ------------------------------------------------------ 极简语法高亮
+ * 单遍替换:注释 → 字符串 → 数字 → 关键字。顺序和「一遍扫过」是关键,
+ * 换个顺序就会在字符串里面找注释(比如 "http://…" 里的 //)。
+ * 只上三种颜色:关键字、字符串、注释。别的都是灰。
+ */
+;(function () {
+  var KEYWORDS = [
+    // Rust
+    'as','async','await','break','const','continue','crate','dyn','else','enum','extern',
+    'false','fn','for','if','impl','in','let','loop','match','mod','move','mut','pub','ref',
+    'return','self','Self','static','struct','super','trait','true','type','unsafe','use',
+    'where','while','bool','str','usize','u32','u64','f64','i32','String','Vec','Option',
+    'Result','Some','None','Ok','Err','Path','PathBuf','HashMap','Mutex','Arc','AtomicBool',
+    'Command','Child','Stdio','BufReader','Runtime','Vec','slice',
+    // TS / JS
+    'import','export','from','function','new','class','interface','extends','implements',
+    'typeof','instanceof','undefined','null','this','string','number','boolean','void',
+    'Promise','Set','Map','type','as','const','let',
+    // 命令行
+    'vips','vipsheader','npm','npx','cargo','git','brew','node','cd'
+  ]
+  var KW = new Set(KEYWORDS)
+  var RE = new RegExp(
+    '(\\/\\/[^\\n]*|\\/\\*[\\s\\S]*?\\*\\/|#\\[[^\\]]*\\]|#[^\\n]*)' + // 1 注释 / 属性
+    '|("(?:[^"\\\\\\n]|\\\\.)*"|\'(?:[^\'\\\\\\n]|\\\\.)*\')' +      // 2 字符串
+    '|\\b(\\d[\\d_.]*)\\b' +                                          // 3 数字
+    '|\\b([A-Za-z_][A-Za-z0-9_]*)\\b',                                // 4 标识符
+    'g'
+  )
+
+  function esc(s) {
+    return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+  }
+
+  document.querySelectorAll('pre > code').forEach(function (block) {
+    // 画出来的示意图（进程边界、目录树）不上色:那里没有「代码」,染几个词只是噪音
+    if (block.parentElement.hasAttribute('data-plain')) return
+
+    var src = block.textContent
+    var out = ''
+    var last = 0
+    var m
+    RE.lastIndex = 0
+    while ((m = RE.exec(src)) !== null) {
+      out += esc(src.slice(last, m.index))
+      var text = esc(m[0])
+      if (m[1]) out += '<span class="tok-c">' + text + '</span>'
+      else if (m[2]) out += '<span class="tok-s">' + text + '</span>'
+      else if (m[3]) out += '<span class="tok-n">' + text + '</span>'
+      else if (KW.has(m[4])) out += '<span class="tok-k">' + text + '</span>'
+      else out += text
+      last = m.index + m[0].length
+    }
+    out += esc(src.slice(last))
+    block.innerHTML = out
+  })
+})()
+
+/* ------------------------------------------------------------ 金字塔构建器 */
+;(function () {
+  var bw = document.getElementById('bw')
+  var bh = document.getElementById('bh')
+  var bt = document.getElementById('bt')
+  var sum = document.getElementById('bsum')
+  var box = document.getElementById('levels')
+
+  /* 与 src-tauri/src/vips.rs 的 expected_tile_count 同一套算法:
+     每一级尺寸是上一级的一半、向上取整,直到 1×1。
+     磁盘上的目录号:0 = 1×1,最大号 = 全分辨率。 */
+  function levels(w, h, tile) {
+    var maxLevel = Math.ceil(Math.log2(Math.max(w, h)))
+    var rows = []
+    var total = 0
+    for (var level = 0; level <= maxLevel; level++) {
+      var scale = Math.pow(2, maxLevel - level)
+      var lw = Math.ceil(w / scale)
+      var lh = Math.ceil(h / scale)
+      var cols = Math.ceil(lw / tile)
+      var lines = Math.ceil(lh / tile)
+      total += cols * lines
+      rows.push({ level: level, w: lw, h: lh, cols: cols, rows: lines, count: cols * lines, total: total })
+    }
+    return { rows: rows, total: total, maxLevel: maxLevel }
+  }
+
+  function draw(level) {
+    var cell = Math.max(2, Math.min(13, Math.floor(300 / Math.max(level.cols, level.rows))))
+    var gap = cell >= 6 ? 1 : 0
+    var cv = document.createElement('canvas')
+    cv.width = level.cols * cell
+    cv.height = level.rows * cell
+    var ctx = cv.getContext('2d')
+    var full = level.level === maxLevelNow
+    ctx.fillStyle = full ? '#d9a441' : '#4a7fb5'
+    for (var y = 0; y < level.rows; y++) {
+      for (var x = 0; x < level.cols; x++) {
+        ctx.fillRect(x * cell, y * cell, cell - gap, cell - gap)
+      }
+    }
+    return cv
+  }
+
+  var maxLevelNow = 0
+
+  function fmt(n) { return n.toLocaleString('en-US') }
+
+  function render() {
+    var w = Math.max(1, Math.min(2000000, parseInt(bw.value, 10) || 1))
+    var h = Math.max(1, Math.min(2000000, parseInt(bh.value, 10) || 1))
+    var tile = parseInt(bt.value, 10) || 1024
+
+    var result = levels(w, h, tile)
+    maxLevelNow = result.maxLevel
+
+    sum.innerHTML =
+      fmt(result.rows.length) + ' 级 · 共 <b>' + fmt(result.total) + '</b> 张瓦片' +
+      ' · 全分辨率那级是 ' +
+      fmt(result.rows[result.maxLevel].cols) + '×' + fmt(result.rows[result.maxLevel].rows) +
+      ' = ' + fmt(result.rows[result.maxLevel].count) + ' 张'
+
+    box.innerHTML = ''
+    result.rows.forEach(function (level) {
+      var row = document.createElement('div')
+      row.className = 'lv' +
+        (level.level === result.maxLevel ? ' lv--full' : '') +
+        (level.count === 1 && level.level !== result.maxLevel ? ' lv--tiny' : '')
+
+      var n = document.createElement('div')
+      n.className = 'lv__n'
+      n.textContent = level.level + '/'
+
+      var px = document.createElement('div')
+      px.className = 'lv__px'
+      px.textContent = fmt(level.w) + ' × ' + fmt(level.h) + ' px'
+
+      var count = document.createElement('div')
+      count.className = 'lv__count'
+      count.textContent = level.cols + '×' + level.rows + ' = ' + fmt(level.count) + ' 张'
+
+      var holder = document.createElement('div')
+      holder.className = 'lv__canvas'
+      holder.appendChild(draw(level))
+
+      row.append(n, px, count, holder)
+      box.appendChild(row)
+    })
+  }
+
+  ;[bw, bh].forEach(function (el) { el.addEventListener('input', render) })
+  bt.addEventListener('change', render)
+  render()
+})()
+
+/* -------------------------------------------------------------- 目录高亮 */
+;(function () {
+  var links = Array.prototype.slice.call(document.querySelectorAll('#toc a'))
+  var sections = links.map(function (a) { return document.querySelector(a.getAttribute('href')) })
+  var visible = new Set()
+
+  var io = new IntersectionObserver(function (entries) {
+    entries.forEach(function (e) {
+      if (e.isIntersecting) visible.add(e.target)
+      else visible.delete(e.target)
+    })
+    // 取当前可见的最后一个:滚动方向上「正在读」的那一节
+    var current = null
+    for (var i = 0; i < sections.length; i++) {
+      if (visible.has(sections[i])) current = sections[i]
+    }
+    links.forEach(function (a) {
+      a.classList.toggle('on', current !== null && a.getAttribute('href') === '#' + current.id)
+    })
+  }, { rootMargin: '-10% 0px -70% 0px' })
+
+  sections.forEach(function (s) { if (s) io.observe(s) })
+})()
+</script>
+</body>
+</html>

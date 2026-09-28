@@ -54,6 +54,22 @@ node scripts/cdp.mjs 步骤.json       # 驱动脚本在仓库里,用法见文�
 **里面的 ref 已经自动解包,别再写 `.value`** —— 写了会静默得到 `undefined`,
 JSON 里那个字段直接消失,看着像「没这个数据」。
 
+**先装一个错误收集器。** DOM 断言全绿不等于页面没炸:一个每帧抛一次的异常,
+断言照样过,而用户看到的是「有几样东西不动了」—— 断言只查了你想到要查的东西。
+用 `eval` 在步骤文件的**第一步**装上,最后一步读它:
+
+```json
+[
+  {"eval": "(() => { window.__errs = []; const orig = console.error; console.error = (...a) => { window.__errs.push('console.error: ' + a.map(String).join(' ')); orig(...a) }; addEventListener('error', e => window.__errs.push('error: ' + e.message)); addEventListener('unhandledrejection', e => window.__errs.push('rejection: ' + e.reason)); return 'collector installed'; })()"},
+  "...中间是你自己的操作步骤...",
+  {"eval": "window.__errs"}
+]
+```
+
+最后一步期望 `[]`。**它只能抓到装上之后发生的**,所以必须是第一步;
+setup 阶段的问题(前端启动就抛)抓不到,那种得看 DevTools 或让页面自己上报。
+(2026-09-28 在真页面上验过这条:注入一个异步 `TypeError` 能抓到,不注入时返回 `[]`。)
+
 加载图片不需要点原生对话框,直接调内部函数:
 
 ```js
