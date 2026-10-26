@@ -91,7 +91,10 @@ export function useAnnotationSvg(
       // 绝不抢 OSD 的鼠标事件 —— 交互全部由下方的 viewer 元素处理
       'pointer-events:none',
       'z-index:10',
-      'overflow:visible',
+      // 必须裁到画布内。框是屏幕空间的,图被拖到只剩一角时框的屏幕坐标会跑到画布外;
+      // 不裁的话它会浮在右侧列表上(z-index 比列表高),看着像画串了地方。
+      // 反过来,超出画布的那部分框本来就看不见,被边缘切掉才是对的。
+      'overflow:hidden',
     ].join(';'))
 
     gridLayer = document.createElementNS(SVG_NS, 'g')

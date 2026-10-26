@@ -172,6 +172,15 @@ onMounted(async () => {
   } catch (error) {
     vipsStatus.value = { available: false, message: String(error) }
   }
+
+  // 把上次那张图开回来。放在最后:进度监听和 vips 自检都已经挂上了,
+  // 需要重切的话进度条才有人接。没有记录(第一次跑)就什么都不做。
+  const last = localStorage.getItem(LAST_IMAGE_KEY)
+  if (last) {
+    // 标成「恢复中」:失败时走中性提示而不是红色横幅 ——
+    // 用户没主动做任何事,却看到一条报错,分不清是谁的错
+    await loadPath(last, true)
+  }
 })
 
 onBeforeUnmount(() => {
@@ -649,6 +658,9 @@ function onCacheCleared() {
 
   viewerApi.close()
   image.value = null
+  // 路径也得忘掉。瓦片刚被清光,再记着它,下次启动就会一声不响地重切一遍 ——
+  // 用户清缓存是为了腾地方,不该换来一次几分钟的等待。
+  localStorage.removeItem(LAST_IMAGE_KEY)
   annotations.reset([], [])
   annotationFile.value = null
   annotationWarning.value = null
@@ -686,7 +698,19 @@ async function openImage() {
   }
 }
 
-async function loadPath(path: string) {
+/**
+ * 上次打开的那张图。刷新和重启都会把前端清空,靠它自动开回来 ——
+ * 瓦片还在缓存里的话是秒开,不用重切。
+ *
+ * 存的是**源图路径**而不是瓦片目录:瓦片是缓存,随时可能被清掉,
+ * 而路径是「我想看的是哪张图」,两者生命周期不一样。
+ */
+const LAST_IMAGE_KEY = 'bigimgpin.lastImage'
+
+/**
+ * 打开一张图。`restoring` 表示这是启动时的自动恢复,失败的处理方式不同。
+ */
+async function loadPath(path: string, restoring = false) {
   slicing.value = { percent: 0, tilesDone: 0, tilesTotal: 0 }
   try {
     const prepared = await api.prepareImage(path, sliceParams())
@@ -696,8 +720,16 @@ async function loadPath(path: string) {
     image.value = prepared
     applyAnnotations(loaded, prepared)
     viewerApi.load(prepared)
+    localStorage.setItem(LAST_IMAGE_KEY, prepared.sourcePath)
   } catch (error) {
-    errorMessage.value = String(error)
+    if (restoring) {
+      // 恢复失败就把路径忘掉:图多半是被移走或删了,留着它只会每次启动
+      // 都报一遍同样的错,而自动恢复本来就是个便利功能,不该变成噪音源。
+      localStorage.removeItem(LAST_IMAGE_KEY)
+      notice.value = `上次打开的图没能自动打开:${String(error)}`
+    } else {
+      errorMessage.value = String(error)
+    }
   } finally {
     slicing.value = null
   }
