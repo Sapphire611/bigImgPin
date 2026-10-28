@@ -11,12 +11,17 @@ defineProps<{
   ready: boolean
   canUndo: boolean
   canRedo: boolean
+  /** 当前图有没有同级的 PCS 数据 */
+  hasPcs: boolean
+  pcsVisible: boolean
+  pcsCount: number
 }>()
 
 const emit = defineEmits<{
   open: []
   'update:mode': [ToolMode]
   'update:gridEnabled': [boolean]
+  'update:pcsVisible': [boolean]
   zoomToFit: []
   zoomToOne: []
   undo: []
@@ -81,6 +86,31 @@ const emit = defineEmits<{
           <path d="M8 2v12M2 8h12" />
         </svg>
         网格
+      </button>
+    </div>
+
+    <!--
+      PCS 分布来自源图同级的 JSON,只读。没有数据时按钮禁用,
+      而不是隐藏 —— 隐藏会让「这张图为什么没有 PCS」变成无解之谜。
+    -->
+    <div class="track" role="group" aria-label="PCS 分布">
+      <button
+        :class="{ solid: hasPcs && pcsVisible }"
+        :disabled="!hasPcs"
+        :title="
+          hasPcs
+            ? `显示/隐藏 PCS 分布(${pcsCount} 个,来自同级 JSON)`
+            : '当前图同级没有 PCS JSON 文件'
+        "
+        @click="emit('update:pcsVisible', !pcsVisible)"
+      >
+        <svg viewBox="0 0 16 16" aria-hidden="true">
+          <rect x="2" y="2" width="5" height="5" rx="0.5" />
+          <rect x="9" y="2" width="5" height="5" rx="0.5" />
+          <rect x="2" y="9" width="5" height="5" rx="0.5" />
+          <rect x="9" y="9" width="5" height="5" rx="0.5" />
+        </svg>
+        PCS
       </button>
     </div>
 

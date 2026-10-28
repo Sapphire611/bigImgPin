@@ -6,9 +6,11 @@ import { check } from '@tauri-apps/plugin-updater'
 import type {
   CropOutcome,
   CropProgress,
+  DefectSet,
   ExportRect,
   Guide,
   LoadedAnnotations,
+  PcsLayout,
   PreparedImage,
   Region,
   SaveOutcome,
@@ -47,6 +49,28 @@ export function cacheStats(): Promise<[number, number]> {
 
 export function clearCache(): Promise<void> {
   return invoke<void>('clear_cache')
+}
+
+// ---------------------------------------------------------------- PCS 分布
+
+/**
+ * 读源图同级的 `<图名>.json`。没有同名文件时返回 null —— 多数图本来就没有,
+ * 那不是错误。文件在但解析失败才会 reject。
+ */
+export function loadPcsLayout(path: string): Promise<PcsLayout | null> {
+  return invoke<PcsLayout | null>('load_pcs_layout', { path })
+}
+
+// ---------------------------------------------------------------- 缺陷
+
+/**
+ * 读拖入的缺陷结果 JSON。
+ *
+ * `panelScale` 必须来自当前已加载的 PCS 布局 —— 缺陷 ROI 和 PCS 用的是
+ * 同一套 gerber 坐标,只有乘同一个系数才能落在图上。
+ */
+export function loadDefects(path: string, panelScale: number): Promise<DefectSet> {
+  return invoke<DefectSet>('load_defects', { path, panelScale })
 }
 
 // ---------------------------------------------------------------- 标注

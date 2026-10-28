@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { getCurrentWebview } from '@tauri-apps/api/webview'
 
 import * as api from './api/tauri'
 import RectPanel from './components/RectPanel.vue'
@@ -23,8 +24,11 @@ import { modeCursor, useViewer } from './osd/useViewer'
 import { sliceParams } from './state/slicePrefs'
 import { useAnnotations } from './state/useAnnotations'
 import type {
+  Defect,
+  DefectSet,
   ExportRect,
   LoadedAnnotations,
+  PcsLayout,
   PreparedImage,
   Rect,
   Region,
@@ -59,6 +63,21 @@ const notice = ref<string | null>(null)
 /** 裁剪导出的进度。null 表示没有在导出。 */
 const cropping = ref<{ done: number; total: number } | null>(null)
 
+/**
+ * 源图同级的 PCS 分布(上游 JSON 里的 single_pcs_list)。
+ * 它是只读参考层,和 annotations 完全分开:不进撤销栈、不落盘。
+ */
+const pcsLayout = ref<PcsLayout | null>(null)
+const pcsVisible = ref(true)
+const hasPcs = computed(() => (pcsLayout.value?.pcs.length ?? 0) > 0)
+
+/**
+ * 拖入的缺陷结果。和 PCS 一样是只读参考层:可以点选,但不进撤销栈、
+ * 不落盘、不能拖动。换图时整份清掉 —— 缺陷坐标属于特定的那张图。
+ */
+const defectSet = ref<DefectSet | null>(null)
+const selectedDefectId = ref<string | null>(null)
+
 /** 设置面板(缓存维护 + 切片参数)开着没有 */
 const settingsOpen = ref(false)
 
@@ -74,6 +93,19 @@ const overlay = useAnnotationSvg(() => viewerApi.viewer.value, () => stageEl.val
 // 而拖拽路径上的漏调只在特定操作顺序下才暴露,很难查。
 watch(regions, (value) => overlay.setRegions(value))
 watch(guides, (value) => overlay.setGuides(value))
+// PCS 是只读参考层:跟着「有没有数据 + 用户开没开」走,不参与标注状态
+watch([pcsLayout, pcsVisible], () => {
+  overlay.setPcs(pcsVisible.value && pcsLayout.value ? pcsLayout.value.pcs : [])
+})
+// 缺陷和它的选中项一起交给叠加层 —— 拆成两次调用会多画一帧
+watch([defectSet, selectedDefectId], () => {
+  overlay.setDefects(defectSet.value?.defects ?? [], selectedDefectId.value)
+})
+// 选中标注时清掉缺陷选中。两套高亮不能同时存在:那种状态下按 Delete
+// 删掉的是标注框,而用户可能以为删的是缺陷
+watch(selectedIds, (value) => {
+  if (value.size > 0) selectedDefectId.value = null
+})
 watch(selectedIds, (value) => overlay.setSelection(value))
 // 拖动模式下不画手柄:那时候拖拽是平移画面,画着几个拖不动的方块是在骗人
 watch(mode, (value) => overlay.setHandlesVisible(value === 'draw'))
@@ -164,6 +196,27 @@ onMounted(async () => {
       cropping.value = { done: progress.done, total: progress.total }
     }),
   )
+
+  // 缺陷结果 JSON 直接拖进窗口就加载。用 Tauri 的拖放事件而不是 HTML5 dnd:
+  // 前者拿到的是本地绝对路径,后者在 WebView 里只有 File 对象,还得再走一遍读文件。
+  try {
+    const webview = getCurrentWebview()
+    cleanups.push(
+      await webview.onDragDropEvent((event) => {
+        if (event.payload.type !== 'drop') return
+        const path = event.payload.paths.find((item) => item.toLowerCase().endsWith('.json'))
+        if (!path) {
+          notice.value = '请拖入缺陷结果 JSON 文件(.json)'
+          return
+        }
+        void loadDefectFile(path)
+      }),
+    )
+  } catch (error) {
+    // 纯浏览器(dev:web)里没有 Tauri 的拖放接口。这不是启动错误,
+    // 其余功能在浏览器里本来也依赖 Tauri API,各自会显示自己的提示。
+    console.warn('拖放缺陷文件不可用:', error)
+  }
 
   // 主动查一次,不依赖事件 —— 事件可能在监听器注册之前就已经发过了
   try {
@@ -258,11 +311,19 @@ function findRegionAt(x: number, y: number): Region | null {
 }
 
 function onPointerDown(event: PointerEvent) {
-  if (mode.value !== 'draw' || !image.value || event.button !== 0) return
+  if (!image.value || event.button !== 0) return
 
   const screen = pointerToScreen(event)
   const point = pointerToImage(event)
   if (!screen || !point) return
+
+  // 拖动模式下不拦事件:点中缺陷只是顺手选中,按住拖动仍然是平移画面。
+  // 这里不能 preventDefault —— 那样 OSD 就收不到这次拖动了。
+  if (mode.value !== 'draw') {
+    const defect = findDefectAt(point.x, point.y)
+    if (defect) selectDefect(defect)
+    return
+  }
 
   // 手柄必须先判:它就压在选中框的边框上,和「点中这个框」是重叠的。
   // 反过来先判框的话,选中的框永远拖不到自己的手柄。
@@ -303,6 +364,16 @@ function onPointerDown(event: PointerEvent) {
       }
     }
   } else {
+    // 标注优先于缺陷:缺陷压在标注下面,点到的是用户自己画的框时不该被抢走。
+    // 只有空白处才轮到缺陷 —— 而且选中即止,不进入绘制/拖拽状态。
+    const defect = findDefectAt(point.x, point.y)
+    if (defect) {
+      selectDefect(defect)
+      event.preventDefault()
+      return
+    }
+
+    selectedDefectId.value = null
     annotations.select(null)
     drag = { kind: 'draw', startX: point.x, startY: point.y }
     overlay.setDraft({ x: point.x, y: point.y, w: 0, h: 0 })
@@ -472,6 +543,7 @@ function onKeyDown(event: KeyboardEvent) {
     overlay.setDraft(null)
     drag = null
     annotations.clearSelection()
+    selectedDefectId.value = null
     return
   }
 
@@ -509,6 +581,21 @@ function fetchAnnotations(path: string): Promise<LoadedAnnotations> {
     // 也不能在「不知道原文件有什么」的情况下把它覆盖掉。
     failure: `读取失败:${error}`,
   }))
+}
+
+/**
+ * 读源图同级的 PCS 布局。
+ *
+ * 和标注不同,PCS 是上游产物:读不出来不该挡住打开图片,所以把错误收敛成
+ * 一条提示返回。没有同名 JSON 是正常情况(layout 和 error 都为 null)。
+ */
+function fetchPcsLayout(
+  path: string,
+): Promise<{ layout: PcsLayout | null; error: string | null }> {
+  return api.loadPcsLayout(path).then(
+    (layout) => ({ layout, error: null }),
+    (error) => ({ layout: null, error: String(error) }),
+  )
 }
 
 /**
@@ -664,15 +751,97 @@ function onCacheCleared() {
   annotations.reset([], [])
   annotationFile.value = null
   annotationWarning.value = null
+  // PCS 和缺陷都跟着图走:图关了,参考框也不该留在画布上
+  pcsLayout.value = null
+  defectSet.value = null
+  selectedDefectId.value = null
   // 图都没了,再自动保存就会往一个没有对应图像的路径写
   saveEnabled = false
 }
 
-/** 把视图移到指定框。框比视口大就缩放到装得下,否则只平移不改缩放。 */
-function focusRegion(region: Region) {
+// ---------------------------------------------------------------- 缺陷
+
+/** 命中最上面的缺陷框。缺陷按列表顺序绘制,所以从后往前找。 */
+function findDefectAt(x: number, y: number): Defect | null {
+  const list = defectSet.value?.defects ?? []
+  for (let i = list.length - 1; i >= 0; i -= 1) {
+    const defect = list[i]
+    if (
+      x >= defect.x &&
+      x <= defect.x + defect.w &&
+      y >= defect.y &&
+      y <= defect.y + defect.h
+    ) {
+      return defect
+    }
+  }
+  return null
+}
+
+/**
+ * 选中一条缺陷。缺陷**只读**,所以这里不建立 drag 状态,也不让它进标注列表。
+ * 选中标注和选中缺陷互斥 —— 两套高亮同时亮着时,Delete 删的是哪边会让人犹豫。
+ */
+function selectDefect(defect: Defect, focus = false) {
+  annotations.clearSelection()
+  selectedDefectId.value = defect.id
+  if (focus) focusDefect(defect)
+}
+
+/**
+ * 缺陷定位。和标注框不同,缺陷 ROI 只有几十个图像像素 —— 按「框装得下就
+ * 只平移」的老规则,在适应窗口的缩放下它只有两三个屏幕像素,点一行几乎
+ * 看不出去了哪里。这里额外把缩放拉到至少 1:1(图像像素 = 屏幕像素),
+ * 已经放得更大时保持不动。
+ */
+function focusDefect(defect: Defect) {
   const viewer = viewerApi.viewer.value
   if (!viewer) return
-  const bounds = imageToViewportRect(viewer, region)
+  const bounds = imageToViewportRect(viewer, defect)
+  const native = oneToOneZoom(viewer)
+  if (!bounds || native == null) return
+
+  const target = Math.max(viewer.viewport.getZoom(true), native)
+  viewer.viewport.zoomTo(target, undefined, true)
+  viewer.viewport.panTo(bounds.getCenter(), true)
+}
+
+function clearDefects() {
+  defectSet.value = null
+  selectedDefectId.value = null
+}
+
+/**
+ * 拖入缺陷结果后加载。
+ *
+ * 缩放必须用当前 PCS 布局的 panel_scale:缺陷 ROI 和 PCS 是同一套 gerber 坐标。
+ * 没有 PCS 数据时宁可不加载,也不拿 0.1 之类的猜测值去画 —— 画错位置比不画
+ * 更难发现,而且会让人怀疑整套坐标。
+ */
+async function loadDefectFile(path: string) {
+  const layout = pcsLayout.value
+  if (!image.value || !layout) {
+    notice.value = '请先打开对应图片并加载 PCS 数据,再拖入缺陷结果 JSON'
+    return
+  }
+
+  try {
+    const loaded = await api.loadDefects(path, layout.panelScale)
+    defectSet.value = loaded
+    selectedDefectId.value = null
+    notice.value = loaded.defects.length
+      ? `已加载 ${loaded.defects.length} 个缺陷(${loaded.productSerial} / ${loaded.sideIndex} 面)`
+      : '这份结果里没有可显示的缺陷'
+  } catch (error) {
+    notice.value = `缺陷文件没能读取:${String(error)}`
+  }
+}
+
+/** 把视图移到指定矩形。框比视口大就缩放到装得下,否则只平移不改缩放。 */
+function focusRegion(rect: Rect) {
+  const viewer = viewerApi.viewer.value
+  if (!viewer) return
+  const bounds = imageToViewportRect(viewer, rect)
   if (!bounds) return
 
   const viewportBounds = viewer.viewport.getBounds()
@@ -714,11 +883,19 @@ async function loadPath(path: string, restoring = false) {
   slicing.value = { percent: 0, tilesDone: 0, tilesTotal: 0 }
   try {
     const prepared = await api.prepareImage(path, sliceParams())
-    // 标注先取回来(异步),再和图像一起换上去(同步,中间不插 await)。
+    // 标注和 PCS 都先取回来(异步),再和图像一起换上去(同步,中间不插 await)。
     // 读不到就是空的,旧图的框不会被带过来 —— 它们对新图的坐标没有意义。
-    const loaded = await fetchAnnotations(prepared.sourcePath)
+    const [loaded, pcs] = await Promise.all([
+      fetchAnnotations(prepared.sourcePath),
+      fetchPcsLayout(prepared.sourcePath),
+    ])
     image.value = prepared
     applyAnnotations(loaded, prepared)
+    pcsLayout.value = pcs.layout
+    // 缺陷属于上一张图,不能跟着新图一起留着
+    defectSet.value = null
+    selectedDefectId.value = null
+    if (pcs.error) notice.value = `PCS 分布没能读取:${pcs.error}`
     viewerApi.load(prepared)
     localStorage.setItem(LAST_IMAGE_KEY, prepared.sourcePath)
   } catch (error) {
@@ -771,9 +948,13 @@ function onGridToggle(enabled: boolean) {
       :ready="vipsStatus?.available === true"
       :can-undo="canUndo"
       :can-redo="canRedo"
+      :has-pcs="hasPcs"
+      :pcs-visible="pcsVisible"
+      :pcs-count="pcsLayout?.pcs.length ?? 0"
       @open="openImage"
       @update:mode="setMode"
       @update:grid-enabled="onGridToggle"
+      @update:pcs-visible="pcsVisible = $event"
       @zoom-to-fit="zoomToFit"
       @zoom-to-one="zoomToOne"
       @undo="annotations.undo"
@@ -855,6 +1036,8 @@ function onGridToggle(enabled: boolean) {
         :regions="regions"
         :guides="guides"
         :selected-ids="selectedIds"
+        :defect-set="defectSet"
+        :selected-defect-id="selectedDefectId"
         :image-width="image?.width ?? 0"
         :image-height="image?.height ?? 0"
         :has-image="hasImage"
@@ -864,6 +1047,8 @@ function onGridToggle(enabled: boolean) {
         @toggle="annotations.toggleSelected"
         @rename="annotations.renameRegion"
         @clear-regions="annotations.clearRegions"
+        @select-defect="selectDefect($event, true)"
+        @clear-defects="clearDefects"
         @remove-guide="annotations.removeGuide"
         @clear-guides="annotations.clearGuides"
         @focus="focusRegion"

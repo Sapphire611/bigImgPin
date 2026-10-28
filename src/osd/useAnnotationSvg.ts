@@ -18,7 +18,7 @@
 import { onBeforeUnmount } from 'vue'
 import OpenSeadragon from 'openseadragon'
 
-import type { Guide, Rect, Region } from '../types'
+import type { Defect, Guide, PcsBox, Rect, Region } from '../types'
 import { imageToScreenTransform, visibleImageRect, type HandleId } from './coords'
 
 const SVG_NS = 'http://www.w3.org/2000/svg'
@@ -38,6 +38,20 @@ const HANDLE_SLOP = 3
 
 const HANDLE_IDS: HandleId[] = ['nw', 'n', 'ne', 'e', 'se', 's', 'sw', 'w']
 
+/**
+ * PCS 按 tid 配色。选的都是亮色 —— 它们画在版图照片上,不是画在界面底色上,
+ * 判断依据只有「在深绿/深蓝的板子上能不能一眼看见」。
+ * 和标注的 PALETTE 刻意错开,避免参考框和用户自己画的框看起来是同一类东西。
+ */
+const PCS_COLORS = ['#ffd666', '#36cfc9', '#ff85c0', '#91d5ff']
+
+/**
+ * 缺陷框:板内缺陷红色,面板级「全局点」琥珀色。
+ * 两者都是只读参考,颜色只用来区分来源,不抢标注框的注意力。
+ */
+const DEFECT_COLOR = '#ff4d4f'
+const DEFECT_GLOBAL_COLOR = '#ffa940'
+
 export interface GridState {
   enabled: boolean
   /** 主网格间距(图像像素) */
@@ -51,11 +65,16 @@ export function useAnnotationSvg(
 ) {
   let svg: SVGSVGElement | null = null
   let gridLayer: SVGGElement
+  let pcsLayer: SVGGElement
+  let defectLayer: SVGGElement
   let guideLayer: SVGGElement
   let regionLayer: SVGGElement
   let draftLayer: SVGGElement
 
   let regions: Region[] = []
+  let pcs: PcsBox[] = []
+  let defects: Defect[] = []
+  let selectedDefectId: string | null = null
   let guides: Guide[] = []
   let selection: Set<string> = new Set()
   /** 画不画缩放手柄。拖动模式下不画 —— 那时拖拽是平移画面,画着几个拖不动的方块是在骗人。 */
@@ -98,10 +117,13 @@ export function useAnnotationSvg(
     ].join(';'))
 
     gridLayer = document.createElementNS(SVG_NS, 'g')
+    pcsLayer = document.createElementNS(SVG_NS, 'g')
+    defectLayer = document.createElementNS(SVG_NS, 'g')
     guideLayer = document.createElementNS(SVG_NS, 'g')
     regionLayer = document.createElementNS(SVG_NS, 'g')
     draftLayer = document.createElementNS(SVG_NS, 'g')
-    svg.append(gridLayer, guideLayer, regionLayer, draftLayer)
+    // PCS / 缺陷都在标注下面:它们只是参考底图,用户画的框和辅助线要压在上面
+    svg.append(gridLayer, pcsLayer, defectLayer, guideLayer, regionLayer, draftLayer)
 
     // 后插入 => 天然叠在 OSD 的 canvas 之上
     container.appendChild(svg)
@@ -133,6 +155,8 @@ export function useAnnotationSvg(
     }
 
     drawGrid(transform, visible)
+    drawPcs(transform)
+    drawDefects(transform, visible)
     drawGuides(transform)
     drawRegions(transform)
     drawDraft(transform)
@@ -192,6 +216,148 @@ export function useAnnotationSvg(
     fragment.appendChild(gridScaleLabel(step))
 
     gridLayer.appendChild(fragment)
+  }
+
+  /**
+   * PCS 分布:只读参考框 + 框中央的 PCS id。
+   *
+   * 线宽用 1.5 而不是和标注一样的 2:这两层会叠在一起,粗细一样就分不清
+   * 哪个是文件里的、哪个是自己画的。文字用深色描边打底,是为了在亮色板面
+   * (白色丝印、金属焊盘)上也能读出来 —— 只靠彩色 fill 会被背景吞掉。
+   */
+  function drawPcs(transform: ReturnType<typeof imageToScreenTransform> & object) {
+    pcsLayer.replaceChildren()
+    if (pcs.length === 0) return
+
+    const fragment = document.createDocumentFragment()
+    for (const box of pcs) {
+      const x = transform.x(box.x)
+      const y = transform.y(box.y)
+      const width = transform.x(box.x + box.w) - x
+      const height = transform.y(box.y + box.h) - y
+      const color = PCS_COLORS[Math.abs(box.tid) % PCS_COLORS.length]
+
+      const rect = document.createElementNS(SVG_NS, 'rect')
+      rect.setAttribute('x', String(x))
+      rect.setAttribute('y', String(y))
+      rect.setAttribute('width', String(Math.max(width, 1)))
+      rect.setAttribute('height', String(Math.max(height, 1)))
+      rect.setAttribute('fill', 'none')
+      rect.setAttribute('stroke', color)
+      rect.setAttribute('stroke-width', '1.5')
+      rect.setAttribute('stroke-opacity', '0.9')
+      fragment.appendChild(rect)
+
+      const label = document.createElementNS(SVG_NS, 'text')
+      label.setAttribute('x', String(x + width / 2))
+      label.setAttribute('y', String(y + height / 2))
+      label.setAttribute('text-anchor', 'middle')
+      label.setAttribute('dominant-baseline', 'central')
+      label.setAttribute('font-family', 'ui-monospace, SFMono-Regular, Menlo, monospace')
+      label.setAttribute('font-size', '12')
+      label.setAttribute('fill', color)
+      label.setAttribute('stroke', 'rgba(0, 0, 0, 0.6)')
+      label.setAttribute('stroke-width', '3')
+      label.setAttribute('paint-order', 'stroke')
+      label.textContent = String(box.id)
+      fragment.appendChild(label)
+    }
+    pcsLayer.appendChild(fragment)
+  }
+
+  /**
+   * 缺陷 ROI:未选中的全部并进**两个 `<path>`**(红/琥珀各一条),选中的单独画。
+   *
+   * 缺陷动辄几百上千个,如果每个都建一个 `<rect>`,平移时每帧要重建上千个
+   * DOM 节点;一条 path 里放几百个矩形子路径,重绘成本基本只和顶点数有关。
+   * 视野外的框直接跳过 —— 缩放到局部之后,每帧真正要画的往往只有个位数。
+   *
+   * 缺陷只读:这里只画框和「选中」高亮,没有手柄。
+   */
+  function drawDefects(
+    transform: ReturnType<typeof imageToScreenTransform> & object,
+    visible: Rect,
+  ) {
+    defectLayer.replaceChildren()
+    if (defects.length === 0) return
+
+    const normal: string[] = []
+    const global: string[] = []
+    let selected: Defect | null = null
+
+    for (const defect of defects) {
+      if (defect.id === selectedDefectId) {
+        selected = defect
+        continue
+      }
+      if (
+        defect.x + defect.w < visible.x ||
+        defect.x > visible.x + visible.w ||
+        defect.y + defect.h < visible.y ||
+        defect.y > visible.y + visible.h
+      ) {
+        continue
+      }
+
+      const x = transform.x(defect.x)
+      const y = transform.y(defect.y)
+      const right = transform.x(defect.x + defect.w)
+      const bottom = transform.y(defect.y + defect.h)
+      ;(defect.pcsKey === 0 ? global : normal).push(`M${x} ${y}H${right}V${bottom}H${x}Z`)
+    }
+
+    const fragment = document.createDocumentFragment()
+    if (normal.length > 0) fragment.appendChild(defectPath(normal.join(''), DEFECT_COLOR))
+    if (global.length > 0) {
+      fragment.appendChild(defectPath(global.join(''), DEFECT_GLOBAL_COLOR))
+    }
+
+    if (selected) {
+      const color = selected.pcsKey === 0 ? DEFECT_GLOBAL_COLOR : DEFECT_COLOR
+      const x = transform.x(selected.x)
+      const y = transform.y(selected.y)
+      const width = transform.x(selected.x + selected.w) - x
+      const height = transform.y(selected.y + selected.h) - y
+
+      const rect = document.createElementNS(SVG_NS, 'rect')
+      rect.setAttribute('x', String(x))
+      rect.setAttribute('y', String(y))
+      rect.setAttribute('width', String(Math.max(width, 1)))
+      rect.setAttribute('height', String(Math.max(height, 1)))
+      rect.setAttribute('fill', color)
+      rect.setAttribute('fill-opacity', '0.1')
+      rect.setAttribute('stroke', color)
+      rect.setAttribute('stroke-width', '3')
+      fragment.appendChild(rect)
+
+      // 只在选中时显示文字:几百个缺陷都挂标签会把 PCS 编号和版图一起盖住
+      const label = document.createElementNS(SVG_NS, 'text')
+      label.setAttribute('x', String(x))
+      // 顶部空间不够就画进框里,免得标签被画布边缘切掉
+      label.setAttribute('y', String(y > 16 ? y - 6 : y + 14))
+      label.setAttribute('font-family', 'ui-monospace, SFMono-Regular, Menlo, monospace')
+      label.setAttribute('font-size', '12')
+      label.setAttribute('fill', color)
+      label.setAttribute('stroke', 'rgba(0, 0, 0, 0.65)')
+      label.setAttribute('stroke-width', '3')
+      label.setAttribute('paint-order', 'stroke')
+      const pcsText = selected.pcsKey === 0 ? '全局点' : `PCS ${selected.pcsKey}`
+      const labelText = selected.label ? `${selected.code} ${selected.label}` : selected.code
+      label.textContent = `${pcsText} · ${labelText} · #${selected.defectIndex}`
+      fragment.appendChild(label)
+    }
+
+    defectLayer.appendChild(fragment)
+  }
+
+  function defectPath(d: string, color: string): SVGPathElement {
+    const element = document.createElementNS(SVG_NS, 'path')
+    element.setAttribute('d', d)
+    element.setAttribute('fill', 'none')
+    element.setAttribute('stroke', color)
+    element.setAttribute('stroke-width', '1')
+    element.setAttribute('stroke-opacity', '0.85')
+    return element
   }
 
   function drawGuides(transform: ReturnType<typeof imageToScreenTransform> & object) {
@@ -321,6 +487,8 @@ export function useAnnotationSvg(
 
   function clearLayers() {
     gridLayer?.replaceChildren()
+    pcsLayer?.replaceChildren()
+    defectLayer?.replaceChildren()
     guideLayer?.replaceChildren()
     regionLayer?.replaceChildren()
     draftLayer?.replaceChildren()
@@ -364,6 +532,16 @@ export function useAnnotationSvg(
         }
       }
       return null
+    },
+    setPcs(next: PcsBox[]) {
+      pcs = next
+      draw()
+    },
+    /** 缺陷和选中项一起传:选中变化只触发一次重绘 */
+    setDefects(next: Defect[], selectedId: string | null) {
+      defects = next
+      selectedDefectId = selectedId
+      draw()
     },
     setGuides(next: Guide[]) {
       guides = next

@@ -73,6 +73,51 @@ export interface Region extends Rect {
   name?: string
 }
 
+// ---------------------------------------------------------------- PCS 分布
+
+/**
+ * 源图同级 JSON 里的一个 PCS。坐标已经乘过 `panelScale`,是图像像素。
+ *
+ * 与 `Region` 的区别不只是少个颜色:它来自上游文件、只读,不参与标注的
+ * 撤销和落盘,所以单独一个类型,不和 Region 混用。
+ */
+export interface PcsBox extends Rect {
+  /** `single_pcs_list[].id`,画在框中间的数字 */
+  id: number
+  /** 所属的料/拼板编号,用来配色 */
+  tid: number
+}
+
+export interface PcsLayout {
+  panelScale: number
+  pcs: PcsBox[]
+}
+
+// ---------------------------------------------------------------- 缺陷
+
+/**
+ * 从拖入的缺陷结果 JSON 里取出的一条缺陷。ROI 已乘过当前 PCS 布局的
+ * `panelScale`,是图像像素。
+ *
+ * 只读:可以点选,但不能拖动/缩放,也不进标注文件。
+ */
+export interface Defect extends Rect {
+  id: string
+  defectIndex: number
+  code: string
+  label: string
+  location: string
+  /** `pcs_info` 的 key;0 表示 `panel_info` 里的全局点 */
+  pcsKey: number
+}
+
+export interface DefectSet {
+  productSerial: string
+  sideIndex: string
+  panelId: number
+  defects: Defect[]
+}
+
 /** 辅助线:固定在某条图像坐标上的横线或竖线。 */
 export interface Guide {
   axis: 'x' | 'y'

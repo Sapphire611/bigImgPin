@@ -2,7 +2,9 @@
 
 mod annotations;
 mod commands;
+mod defects;
 mod export;
+mod pcs;
 mod tiles_protocol;
 mod vips;
 
@@ -29,6 +31,8 @@ pub fn run() {
             commands::clear_cache,
             annotations::load_annotations,
             annotations::save_annotations,
+            pcs::load_pcs_layout,
+            defects::load_defects,
             export::export_regions_csv,
             export::export_crops,
         ])

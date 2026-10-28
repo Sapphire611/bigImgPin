@@ -7,7 +7,7 @@ import {
   formatCoord,
   roundRect,
 } from '../osd/coords'
-import type { ExportRect, Guide, Rect, Region } from '../types'
+import type { Defect, DefectSet, ExportRect, Guide, Rect, Region } from '../types'
 
 /** 可选的坐标小数位数。0 在最前,因为它是默认值。 */
 const DECIMALS_CHOICES = Array.from({ length: COORD_DECIMALS_MAX + 1 }, (_, i) => i)
@@ -16,6 +16,9 @@ const props = defineProps<{
   regions: Region[]
   guides: Guide[]
   selectedIds: Set<string>
+  /** 拖入的缺陷结果。null 表示还没加载 */
+  defectSet: DefectSet | null
+  selectedDefectId: string | null
   imageWidth: number
   imageHeight: number
   hasImage: boolean
@@ -28,12 +31,19 @@ const emit = defineEmits<{
   toggle: [string]
   rename: [string, string]
   clearRegions: []
+  selectDefect: [Defect]
+  clearDefects: []
   removeGuide: [number]
   clearGuides: []
-  focus: [Region]
+  focus: [Rect]
   exportCsv: [ExportRect[]]
   exportCrops: [ExportRect[]]
 }>()
+
+/** 和叠加层保持一致:全局点琥珀色,板内缺陷红色。 */
+function defectColor(defect: Defect): string {
+  return defect.pcsKey === 0 ? '#ffa940' : '#ff4d4f'
+}
 
 /**
  * 点一行。Ctrl / Cmd 是加减选,普通点是单选。
@@ -352,6 +362,52 @@ function loadFrom(region: Region) {
     </section>
 
     <!--
+      缺陷列表来自拖入的结果 JSON,和上面用户自己画的框是两回事:
+      只读、不进撤销栈、不能拖动。点一行会在画布上选中并定位。
+    -->
+    <section v-if="defectSet && defectSet.defects.length > 0">
+      <h3>
+        缺陷
+        <span class="count">{{ defectSet.defects.length }}</span>
+        <button class="mini clear" title="清除已加载的缺陷" @click="emit('clearDefects')">
+          清除
+        </button>
+      </h3>
+
+      <p class="meta">
+        {{ defectSet.productSerial }} · {{ defectSet.sideIndex }} 面 ·
+        panel {{ defectSet.panelId }}
+      </p>
+      <p class="hint">框只可选中,不可编辑;点击一行定位到该缺陷。</p>
+
+      <ul class="list defects">
+        <li
+          v-for="(defect, index) in defectSet.defects"
+          :key="`${defect.id}-${index}`"
+          :class="{ selected: defect.id === selectedDefectId }"
+          :title="`${defect.location} · ${formatCoord(defect.x)}, ${formatCoord(defect.y)} · ${defect.id}`"
+          @click="emit('selectDefect', defect)"
+        >
+          <span class="dot" :style="{ background: defectColor(defect) }" />
+          <span class="idx">{{ index + 1 }}</span>
+          <span class="text">
+            <span class="pos">
+              <span class="name">{{ defect.code }}</span>
+              {{ defect.label }}
+              <span class="pcs-chip" :class="{ global: defect.pcsKey === 0 }">
+                {{ defect.pcsKey === 0 ? 'PCS 0 · 全局点' : `PCS ${defect.pcsKey}` }}
+              </span>
+            </span>
+            <span class="size">
+              #{{ defect.defectIndex }} · {{ defect.location }} ·
+              {{ formatCoord(defect.x) }}, {{ formatCoord(defect.y) }}
+            </span>
+          </span>
+        </li>
+      </ul>
+    </section>
+
+    <!--
       放在框列表之后、辅助线之前。辅助线那一节基本是回看用的列表,
       而这两个按钮得让人找得到 —— 面板整体比窗口高,越靠下越容易被折在视野外。
     -->
@@ -461,6 +517,22 @@ h3 {
   font-size: 11px;
   font-variant-numeric: tabular-nums;
   color: var(--text-dim);
+}
+
+/* 清除是卸载动作,推到标题右边,不和计数抢位置 */
+.clear {
+  margin-left: auto;
+}
+
+/* 结果文件的元信息:型号 / 面 / 面板号。等宽字体,一行放不下就省略 */
+.meta {
+  margin: 0;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--text-faint);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .grid {
@@ -652,6 +724,31 @@ button.mini.danger:hover:not(:disabled) {
   height: 8px;
   border-radius: 2px;
   flex-shrink: 0;
+}
+
+/* PCS key 是缺陷和板内位置的唯一关联,用 chip 让它从坐标文字里跳出来。
+   全局点(0)用琥珀色边和字,和画布上的琥珀框对应。 */
+.pcs-chip {
+  display: inline-block;
+  margin-left: 4px;
+  padding: 0 5px;
+  border-radius: 3px;
+  border: 1px solid var(--border);
+  background: var(--stage);
+  color: var(--text-dim);
+  font-family: var(--font-mono);
+  font-size: 10px;
+  line-height: 1.5;
+}
+
+.pcs-chip.global {
+  border-color: var(--warn-text);
+  color: var(--warn-text);
+}
+
+/* 缺陷可能几百条,给列表一个自己的高度上限,别把下面的导出按钮顶出视野 */
+.list.defects {
+  max-height: 300px;
 }
 
 .idx {
