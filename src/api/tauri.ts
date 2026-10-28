@@ -6,6 +6,7 @@ import { check } from '@tauri-apps/plugin-updater'
 import type {
   CropOutcome,
   CropProgress,
+  DefectImageResult,
   DefectSet,
   ExportRect,
   Guide,
@@ -71,6 +72,22 @@ export function loadPcsLayout(path: string): Promise<PcsLayout | null> {
  */
 export function loadDefects(path: string, panelScale: number): Promise<DefectSet> {
   return invoke<DefectSet>('load_defects', { path, panelScale })
+}
+
+/**
+ * 从 MinIO 取一张缺陷图。
+ *
+ * 走 Rust 而不是前端 fetch:zip 内图片需要 `x-minio-extract` 请求头,`<img>` 设不了;
+ * 顺带也绕开 WebView 的 CORS 差异。`prefixes` / `bases` 都是候选,命中为止,
+ * 返回值里带着实际命中的那一组,前端可以缓存。
+ */
+export function fetchDefectImage(
+  image: string,
+  bucket: string,
+  prefixes: string[],
+  bases: string[],
+): Promise<DefectImageResult> {
+  return invoke<DefectImageResult>('fetch_defect_image', { image, bucket, prefixes, bases })
 }
 
 // ---------------------------------------------------------------- 标注

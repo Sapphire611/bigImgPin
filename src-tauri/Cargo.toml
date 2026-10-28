@@ -26,6 +26,12 @@ tauri-plugin-dialog = "2"
 tauri-plugin-updater = "2.12.0"
 tauri-plugin-process = "2.3.1"
 
+# 缺陷图要从 MinIO 取:zip 内图片必须带 x-minio-extract 请求头,<img> 设不了。
+# reqwest 本来就在更新插件的依赖树里,这里只是直接用它;minio 是 http,不需要 TLS。
+reqwest = { version = "0.13", default-features = false }
+base64 = "0.22"
+percent-encoding = "2"
+
 # 取消切片时要给子进程发信号
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"

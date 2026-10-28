@@ -7,7 +7,15 @@ import {
   formatCoord,
   roundRect,
 } from '../osd/coords'
-import type { Defect, DefectSet, ExportRect, Guide, Rect, Region } from '../types'
+import type {
+  Defect,
+  DefectImageState,
+  DefectSet,
+  ExportRect,
+  Guide,
+  Rect,
+  Region,
+} from '../types'
 
 /** 可选的坐标小数位数。0 在最前,因为它是默认值。 */
 const DECIMALS_CHOICES = Array.from({ length: COORD_DECIMALS_MAX + 1 }, (_, i) => i)
@@ -19,6 +27,10 @@ const props = defineProps<{
   /** 拖入的缺陷结果。null 表示还没加载 */
   defectSet: DefectSet | null
   selectedDefectId: string | null
+  /** 当前选中的那条缺陷,图片预览用 */
+  selectedDefect: Defect | null
+  /** 缺陷图的加载状态。可能属于上一条缺陷,用 defectId 对一下 */
+  defectImage: DefectImageState | null
   imageWidth: number
   imageHeight: number
   hasImage: boolean
@@ -33,6 +45,8 @@ const emit = defineEmits<{
   clearRegions: []
   selectDefect: [Defect]
   clearDefects: []
+  retryDefectImage: []
+  openSettings: []
   removeGuide: [number]
   clearGuides: []
   focus: [Rect]
@@ -369,9 +383,19 @@ function loadFrom(region: Region) {
       <h3>
         缺陷
         <span class="count">{{ defectSet.defects.length }}</span>
-        <button class="mini clear" title="清除已加载的缺陷" @click="emit('clearDefects')">
-          清除
-        </button>
+        <!-- 缺陷图从 MinIO 取,地址要能一眼找到;只放在设置面板里太深了 -->
+        <span class="head-actions">
+          <button
+            class="mini"
+            title="设置缺陷图的 MinIO 地址(旧/新两套)"
+            @click="emit('openSettings')"
+          >
+            MinIO
+          </button>
+          <button class="mini clear" title="清除已加载的缺陷" @click="emit('clearDefects')">
+            清除
+          </button>
+        </span>
       </h3>
 
       <p class="meta">
@@ -405,6 +429,53 @@ function loadFrom(region: Region) {
           </span>
         </li>
       </ul>
+
+      <!--
+        缺陷图放在列表下面:点一行就在这里出图。图片走 Rust 从 MinIO 取(见
+        src-tauri/src/defect_images.rs),失败原因直接写在这块里 —— 多半是 MinIO
+        地址/前缀没对上,弹全局错误横幅反而像应用坏了。
+      -->
+      <div v-if="selectedDefect" class="defect-preview">
+        <div class="preview-head">
+          <span>缺陷图</span>
+          <span class="pcs-chip">{{ selectedDefect.code }}</span>
+          <button
+            v-if="defectImage?.status === 'error'"
+            class="mini retry"
+            title="按当前 MinIO 设置再取一次"
+            @click="emit('retryDefectImage')"
+          >
+            重试
+          </button>
+        </div>
+
+        <p v-if="!selectedDefect.image" class="hint">这条缺陷没有图片路径。</p>
+        <div
+          v-else-if="
+            !defectImage ||
+            defectImage.defectId !== selectedDefect.id ||
+            defectImage.status === 'loading'
+          "
+          class="preview-box"
+        >
+          正在读取缺陷图…
+        </div>
+        <div v-else-if="defectImage.status === 'error'" class="preview-box failed">
+          <span>图片没能加载</span>
+          <span class="detail mono">{{ defectImage.error }}</span>
+        </div>
+        <img
+          v-else-if="defectImage.status === 'ready' && defectImage.dataUrl"
+          class="preview-img"
+          :src="defectImage.dataUrl"
+          :alt="`缺陷图 ${selectedDefect.code}`"
+          :title="defectImage.url"
+        />
+
+        <p v-if="selectedDefect.image" class="path mono" :title="selectedDefect.image">
+          {{ selectedDefect.image }}
+        </p>
+      </div>
     </section>
 
     <!--
@@ -519,9 +590,11 @@ h3 {
   color: var(--text-dim);
 }
 
-/* 清除是卸载动作,推到标题右边,不和计数抢位置 */
-.clear {
+/* 标题右侧的动作组:MinIO 设置和清除都不该和计数抢位置 */
+.head-actions {
   margin-left: auto;
+  display: flex;
+  gap: 4px;
 }
 
 /* 结果文件的元信息:型号 / 面 / 面板号。等宽字体,一行放不下就省略 */
@@ -749,6 +822,79 @@ button.mini.danger:hover:not(:disabled) {
 /* 缺陷可能几百条,给列表一个自己的高度上限,别把下面的导出按钮顶出视野 */
 .list.defects {
   max-height: 300px;
+}
+
+/* 缺陷图预览。宽度跟着 268px 面板走,高度封顶,别把下面的导出按钮顶走 */
+.defect-preview {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 4px;
+}
+
+.preview-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  color: var(--text-faint);
+}
+
+.preview-head .pcs-chip {
+  margin-left: 0;
+}
+
+button.mini.retry {
+  margin-left: auto;
+}
+
+.preview-box {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 8px;
+  border-radius: var(--r-sm);
+  border: 1px solid var(--border);
+  background: var(--stage);
+  color: var(--text-faint);
+  font-size: 11px;
+  line-height: 1.5;
+}
+
+/* 失败用红色只在这块里:它是个「这张图取不到」的具体读数,不是全局故障 */
+.preview-box.failed {
+  color: var(--danger-text);
+  border-color: var(--danger-border);
+  background: var(--danger-bg);
+}
+
+/* 错误信息里带好几个候选 URL,给个上限,别把面板撑爆 */
+.preview-box .detail {
+  color: inherit;
+  font-size: 10px;
+  white-space: pre-wrap;
+  word-break: break-all;
+  max-height: 120px;
+  overflow-y: auto;
+}
+
+.preview-img {
+  width: 100%;
+  max-height: 260px;
+  object-fit: contain;
+  background: var(--stage);
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+}
+
+/* 图片路径是排查用的读数,长了省略,悬停看全 */
+.path {
+  margin: 0;
+  font-size: 10px;
+  color: var(--text-faint);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .idx {

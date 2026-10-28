@@ -110,7 +110,7 @@ const annotationText = computed(() => {
     -->
     <button
       class="readout clickable"
-      :title="`${cacheText} —— 点开清理缓存或改切片参数`"
+      :title="`${cacheText} —— 点开清理缓存、改切片参数或设置缺陷图 MinIO`"
       @click="emit('settings')"
     >
       <label>瓦片缓存</label>

@@ -21,10 +21,12 @@ import {
 } from './osd/coords'
 import { useAnnotationSvg } from './osd/useAnnotationSvg'
 import { modeCursor, useViewer } from './osd/useViewer'
+import { minioBases, minioRevision } from './state/minioPrefs'
 import { sliceParams } from './state/slicePrefs'
 import { useAnnotations } from './state/useAnnotations'
 import type {
   Defect,
+  DefectImageState,
   DefectSet,
   ExportRect,
   LoadedAnnotations,
@@ -78,6 +80,20 @@ const hasPcs = computed(() => (pcsLayout.value?.pcs.length ?? 0) > 0)
 const defectSet = ref<DefectSet | null>(null)
 const selectedDefectId = ref<string | null>(null)
 
+/**
+ * 当前选中缺陷的图片。缺陷本身只读,图片也一样 —— 取失败就显示原因,
+ * 不弹全局错误横幅:那多半是 MinIO 地址没配对,不是应用坏了。
+ */
+const defectImage = ref<DefectImageState | null>(null)
+/** 防止慢请求回来时覆盖已经切到别的缺陷的预览 */
+let defectImageToken = 0
+
+/**
+ * 上次命中的 MinIO 地址和 key 前缀。第一次点击会挨个试候选,命中之后直接复用,
+ * 后续点别的缺陷只发一个请求。设置一改就作废(见下面的 watch)。
+ */
+let defectImageRoute: { base: string; prefix: string } | null = null
+
 /** 设置面板(缓存维护 + 切片参数)开着没有 */
 const settingsOpen = ref(false)
 
@@ -101,6 +117,9 @@ watch([pcsLayout, pcsVisible], () => {
 watch([defectSet, selectedDefectId], () => {
   overlay.setDefects(defectSet.value?.defects ?? [], selectedDefectId.value)
 })
+// 缺陷图到了/失败了都重画浮标。浮标只认 defectId 与选中项相同的那一张,
+// 所以这里不需要再判断一次选中状态。
+watch(defectImage, (value) => overlay.setDefectImage(value))
 // 选中标注时清掉缺陷选中。两套高亮不能同时存在:那种状态下按 Delete
 // 删掉的是标注框,而用户可能以为删的是缺陷
 watch(selectedIds, (value) => {
@@ -109,6 +128,24 @@ watch(selectedIds, (value) => {
 watch(selectedIds, (value) => overlay.setSelection(value))
 // 拖动模式下不画手柄:那时候拖拽是平移画面,画着几个拖不动的方块是在骗人
 watch(mode, (value) => overlay.setHandlesVisible(value === 'draw'))
+
+/** 当前选中的缺陷(恰好一个)。列表和画布上的点击都汇到 selectedDefectId。 */
+const selectedDefect = computed(
+  () => defectSet.value?.defects.find((defect) => defect.id === selectedDefectId.value) ?? null,
+)
+
+// 选中被清掉(Esc、转为选中标注)时,预览也收起来 —— 否则侧栏里会留着一张
+// 「已经没在选中任何东西」的图,按钮却按着它工作
+watch(selectedDefectId, (id) => {
+  if (id) return
+  defectImageToken += 1
+  defectImage.value = null
+})
+
+// 设置改了,上次命中的地址/前缀就不再可信
+watch(minioRevision, () => {
+  defectImageRoute = null
+})
 
 const hasImage = computed(() => image.value !== null)
 
@@ -755,6 +792,9 @@ function onCacheCleared() {
   pcsLayout.value = null
   defectSet.value = null
   selectedDefectId.value = null
+  defectImage.value = null
+  defectImageToken += 1
+  defectImageRoute = null
   // 图都没了,再自动保存就会往一个没有对应图像的路径写
   saveEnabled = false
 }
@@ -786,6 +826,69 @@ function selectDefect(defect: Defect, focus = false) {
   annotations.clearSelection()
   selectedDefectId.value = defect.id
   if (focus) focusDefect(defect)
+  // 已经拿到同一张图就不重复请求;换了一条才去取
+  if (defectImage.value?.defectId !== defect.id) void loadDefectImage(defect)
+}
+
+/**
+ * 取选中缺陷的图片。
+ *
+ * 候选前缀和 MinIO 地址都可能有多个,第一次点击会挨个试;命中的那一组记在
+ * `defectImageRoute` 里,后面点别的缺陷直接复用,不再重复探测。
+ *
+ * 失败只在预览区里说,不弹全局横幅 —— 这多半是 MinIO 地址/前缀没对上,
+ * 换一条缺陷或改完设置就会好,不是应用本身坏了。
+ */
+async function loadDefectImage(defect: Defect) {
+  const set = defectSet.value
+  if (!set) return
+
+  if (!defect.image) {
+    defectImage.value = { defectId: defect.id, status: 'error', error: '这条缺陷没有图片路径' }
+    return
+  }
+
+  const bases = defectImageRoute ? [defectImageRoute.base] : minioBases()
+  if (bases.length === 0) {
+    defectImage.value = {
+      defectId: defect.id,
+      status: 'error',
+      error: '还没有配置 MinIO 地址(设置 → 缺陷图片)',
+    }
+    return
+  }
+
+  const token = ++defectImageToken
+  defectImage.value = { defectId: defect.id, status: 'loading' }
+  try {
+    const result = await api.fetchDefectImage(
+      defect.image,
+      set.bucket,
+      defectImageRoute ? [defectImageRoute.prefix] : set.keyPrefixes,
+      bases,
+    )
+    // 请求期间又选了别的缺陷,这次结果已经过期
+    if (token !== defectImageToken) return
+
+    defectImageRoute = { base: result.base, prefix: result.prefix }
+    defectImage.value = {
+      defectId: defect.id,
+      status: 'ready',
+      dataUrl: result.dataUrl,
+      url: result.url,
+    }
+  } catch (error) {
+    if (token !== defectImageToken) return
+    defectImage.value = { defectId: defect.id, status: 'error', error: String(error) }
+  }
+}
+
+/** 预览区的「重试」。失败后设置可能刚改过,直接再走一遍候选。 */
+function retryDefectImage() {
+  const defect = selectedDefect.value
+  if (!defect) return
+  defectImageRoute = null
+  void loadDefectImage(defect)
 }
 
 /**
@@ -809,6 +912,9 @@ function focusDefect(defect: Defect) {
 function clearDefects() {
   defectSet.value = null
   selectedDefectId.value = null
+  defectImage.value = null
+  defectImageToken += 1
+  defectImageRoute = null
 }
 
 /**
@@ -829,6 +935,10 @@ async function loadDefectFile(path: string) {
     const loaded = await api.loadDefects(path, layout.panelScale)
     defectSet.value = loaded
     selectedDefectId.value = null
+    // 换了一份结果,上一份命中的 MinIO 线路和预览都不再适用
+    defectImage.value = null
+    defectImageToken += 1
+    defectImageRoute = null
     notice.value = loaded.defects.length
       ? `已加载 ${loaded.defects.length} 个缺陷(${loaded.productSerial} / ${loaded.sideIndex} 面)`
       : '这份结果里没有可显示的缺陷'
@@ -895,6 +1005,9 @@ async function loadPath(path: string, restoring = false) {
     // 缺陷属于上一张图,不能跟着新图一起留着
     defectSet.value = null
     selectedDefectId.value = null
+    defectImage.value = null
+    defectImageToken += 1
+    defectImageRoute = null
     if (pcs.error) notice.value = `PCS 分布没能读取:${pcs.error}`
     viewerApi.load(prepared)
     localStorage.setItem(LAST_IMAGE_KEY, prepared.sourcePath)
@@ -1038,6 +1151,8 @@ function onGridToggle(enabled: boolean) {
         :selected-ids="selectedIds"
         :defect-set="defectSet"
         :selected-defect-id="selectedDefectId"
+        :selected-defect="selectedDefect"
+        :defect-image="defectImage"
         :image-width="image?.width ?? 0"
         :image-height="image?.height ?? 0"
         :has-image="hasImage"
@@ -1049,6 +1164,8 @@ function onGridToggle(enabled: boolean) {
         @clear-regions="annotations.clearRegions"
         @select-defect="selectDefect($event, true)"
         @clear-defects="clearDefects"
+        @retry-defect-image="retryDefectImage"
+        @open-settings="settingsOpen = true"
         @remove-guide="annotations.removeGuide"
         @clear-guides="annotations.clearGuides"
         @focus="focusRegion"

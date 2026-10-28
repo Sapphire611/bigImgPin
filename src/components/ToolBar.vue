@@ -160,7 +160,7 @@ const emit = defineEmits<{
     -->
     <button
       class="icon"
-      title="设置:缓存与切片参数"
+      title="设置:缺陷图 MinIO、缓存与切片参数"
       aria-label="设置"
       @click="emit('settings')"
     >

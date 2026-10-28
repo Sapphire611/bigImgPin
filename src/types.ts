@@ -109,6 +109,11 @@ export interface Defect extends Rect {
   location: string
   /** `pcs_info` 的 key;0 表示 `panel_info` 里的全局点 */
   pcsKey: number
+  /**
+   * 第一张缺陷图的 key,相对面板目录(绝对 URL 已去掉主机和 bucket)。
+   * 没有图片时为 null —— 缺陷照常显示,只是点开看不到图。
+   */
+  image: string | null
 }
 
 export interface DefectSet {
@@ -116,6 +121,34 @@ export interface DefectSet {
   sideIndex: string
   panelId: number
   defects: Defect[]
+  /** 图片所在的 MinIO bucket,通常 deepiresults */
+  bucket: string
+  /**
+   * 拼图片 key 时依次尝试的目录前缀。面板在 MinIO 上的真实前缀常被导入工具
+   * 改过,和 JSON 里的 local_describe_path 对不上,所以给一组候选。
+   */
+  keyPrefixes: string[]
+}
+
+/** 一次缺陷图片加载的结果,直接给 `<img>` 用。 */
+export interface DefectImageResult {
+  /** `data:image/jpeg;base64,...` */
+  dataUrl: string
+  /** 实际命中的完整 URL,排查时看它 */
+  url: string
+  /** 命中的 MinIO 地址,后续点击直接复用 */
+  base: string
+  /** 命中的 key 前缀;图片路径原样命中时是空串 */
+  prefix: string
+}
+
+/** 右侧面板里缺陷图的显示状态。 */
+export interface DefectImageState {
+  defectId: string
+  status: 'loading' | 'ready' | 'error'
+  dataUrl?: string
+  url?: string
+  error?: string
 }
 
 /** 辅助线:固定在某条图像坐标上的横线或竖线。 */

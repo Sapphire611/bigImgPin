@@ -10,6 +10,12 @@ import { computed, onMounted, ref } from 'vue'
 
 import { formatBytes } from '../api/tauri'
 import * as api from '../api/tauri'
+import {
+  minioNewIp,
+  minioNewPort,
+  minioOldIp,
+  minioOldPort,
+} from '../state/minioPrefs'
 import { TILE_FORMAT_CHOICES, TILE_SIZE_CHOICES, tileFormat, tileSize } from '../state/slicePrefs'
 import type { PreparedImage } from '../types'
 
@@ -81,6 +87,55 @@ async function clearCache() {
         <h2>设置</h2>
         <button class="close" title="关闭" aria-label="关闭" @click="emit('close')">×</button>
       </header>
+
+      <!--
+        放在最上面:这是「点缺陷出图」唯一需要配的东西,而面板一打开时
+        瓦片缓存和切片参数就把首屏占满了,原来排在最后根本看不见。
+      -->
+      <section>
+        <h3>缺陷图片(MinIO)</h3>
+
+        <!--
+          两套地址并排,因为数据落在哪套上不由本应用决定:旧数据导入旧 MinIO,
+          新数据导入新 MinIO。拉图时先试新、再试旧,用户不用为了换个数据包
+          先来改设置。
+        -->
+        <p class="hint">
+          点击缺陷时从这里取缺陷图。<b>新数据</b>一般在新 MinIO,<b>旧数据</b>在旧 MinIO;
+          会先试新、再试旧,命中哪套用哪套。
+        </p>
+
+        <div class="endpoint">
+          <span class="endpoint-label">新 MinIO</span>
+          <input v-model.trim="minioNewIp" placeholder="127.0.0.1" aria-label="新 MinIO IP" />
+          <span class="colon mono">:</span>
+          <input
+            v-model.trim="minioNewPort"
+            class="port"
+            inputmode="numeric"
+            placeholder="9104"
+            aria-label="新 MinIO 端口"
+          />
+        </div>
+
+        <div class="endpoint">
+          <span class="endpoint-label">旧 MinIO</span>
+          <input v-model.trim="minioOldIp" placeholder="127.0.0.1" aria-label="旧 MinIO IP" />
+          <span class="colon mono">:</span>
+          <input
+            v-model.trim="minioOldPort"
+            class="port"
+            inputmode="numeric"
+            placeholder="9102"
+            aria-label="旧 MinIO 端口"
+          />
+        </div>
+
+        <p class="hint">
+          只填 IP 和端口,不要带 http:// 或 /deepiresults —— 图片路径由拖入的
+          panel.json 决定。两套填一样也不会重复请求。
+        </p>
+      </section>
 
       <section>
         <h3>瓦片缓存</h3>
@@ -257,6 +312,41 @@ h3 {
 
 .wide {
   width: 100%;
+}
+
+/* 地址行:标签固定宽,IP 吃掉剩余宽度,端口只占一小格 */
+.endpoint {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.endpoint-label {
+  width: 58px;
+  flex-shrink: 0;
+  color: var(--text-faint);
+  font-size: 12px;
+}
+
+.endpoint input {
+  flex: 1;
+  min-width: 0;
+  padding: 4px 8px;
+  border-radius: var(--r-sm);
+  border: 1px solid var(--border-strong);
+  background: var(--stage);
+  color: var(--text);
+  font-family: var(--font-mono);
+  font-size: 12px;
+}
+
+.endpoint input.port {
+  flex: none;
+  width: 64px;
+}
+
+.colon {
+  color: var(--text-faint);
 }
 
 .hint {

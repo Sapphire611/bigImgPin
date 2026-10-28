@@ -2,6 +2,7 @@
 
 mod annotations;
 mod commands;
+mod defect_images;
 mod defects;
 mod export;
 mod pcs;
@@ -33,6 +34,7 @@ pub fn run() {
             annotations::save_annotations,
             pcs::load_pcs_layout,
             defects::load_defects,
+            defect_images::fetch_defect_image,
             export::export_regions_csv,
             export::export_crops,
         ])

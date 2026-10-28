@@ -14,11 +14,15 @@
  *
  * SVG 而非 canvas:几十个框在 SVG 的舒适区内,而且以后加「点选某个框」时
  * 命中测试是白送的。
+ *
+ * 选中缺陷时还会从框边拉一条引线,线头挂一张缺陷图。图也画在这层 SVG 上:
+ * 位置必须跟着框走,而框的屏幕坐标只有这一层每帧算得出来;用 DOM 浮层又要
+ * 另写一份坐标换算,迟早和框对不上。
  */
 import { onBeforeUnmount } from 'vue'
 import OpenSeadragon from 'openseadragon'
 
-import type { Defect, Guide, PcsBox, Rect, Region } from '../types'
+import type { Defect, DefectImageState, Guide, PcsBox, Rect, Region } from '../types'
 import { imageToScreenTransform, visibleImageRect, type HandleId } from './coords'
 
 const SVG_NS = 'http://www.w3.org/2000/svg'
@@ -52,6 +56,22 @@ const PCS_COLORS = ['#ffd666', '#36cfc9', '#ff85c0', '#91d5ff']
 const DEFECT_COLOR = '#ff4d4f'
 const DEFECT_GLOBAL_COLOR = '#ffa940'
 
+/**
+ * 缺陷图浮标的边长(屏幕像素),随缩放按比例缩小。
+ * 缩到看整版时还挂一张大图会盖住大半张版图,所以下限压到 48;
+ * 放大到 1:1 以上就封顶在 200,不跟着无限变大。
+ */
+const CALLOUT_MAX_SIZE = 200
+const CALLOUT_MIN_SIZE = 48
+/** 框和浮标之间的引线长度,同样随缩放收缩。 */
+const CALLOUT_GAP = 20
+const CALLOUT_MIN_GAP = 8
+/** 浮标离画布边缘的最小距离。 */
+const CALLOUT_MARGIN = 8
+/** 浮标底色固定用深色:它压在图上面,和界面是深色还是浅色没关系。 */
+const CALLOUT_BG = 'rgba(16, 18, 22, 0.94)'
+const CALLOUT_TEXT = '#e8e8ea'
+
 export interface GridState {
   enabled: boolean
   /** 主网格间距(图像像素) */
@@ -70,11 +90,14 @@ export function useAnnotationSvg(
   let guideLayer: SVGGElement
   let regionLayer: SVGGElement
   let draftLayer: SVGGElement
+  let calloutLayer: SVGGElement
 
   let regions: Region[] = []
   let pcs: PcsBox[] = []
   let defects: Defect[] = []
   let selectedDefectId: string | null = null
+  /** 选中缺陷的图片状态。由 App 在 Fetch 前后传进来,和 selectedDefectId 配对使用。 */
+  let defectImage: DefectImageState | null = null
   let guides: Guide[] = []
   let selection: Set<string> = new Set()
   /** 画不画缩放手柄。拖动模式下不画 —— 那时拖拽是平移画面,画着几个拖不动的方块是在骗人。 */
@@ -122,8 +145,18 @@ export function useAnnotationSvg(
     guideLayer = document.createElementNS(SVG_NS, 'g')
     regionLayer = document.createElementNS(SVG_NS, 'g')
     draftLayer = document.createElementNS(SVG_NS, 'g')
+    // 缺陷图浮标压在最上面:它是个提示,被框或辅助线盖住就没意义了
+    calloutLayer = document.createElementNS(SVG_NS, 'g')
     // PCS / 缺陷都在标注下面:它们只是参考底图,用户画的框和辅助线要压在上面
-    svg.append(gridLayer, pcsLayer, defectLayer, guideLayer, regionLayer, draftLayer)
+    svg.append(
+      gridLayer,
+      pcsLayer,
+      defectLayer,
+      guideLayer,
+      regionLayer,
+      draftLayer,
+      calloutLayer,
+    )
 
     // 后插入 => 天然叠在 OSD 的 canvas 之上
     container.appendChild(svg)
@@ -160,6 +193,7 @@ export function useAnnotationSvg(
     drawGuides(transform)
     drawRegions(transform)
     drawDraft(transform)
+    drawCallout(transform, visible)
   }
 
   /** 1-2-5 序列:网格间距永远是 10/20/50/100/200/500 这种好读的数。 */
@@ -442,6 +476,158 @@ export function useAnnotationSvg(
     draftLayer.appendChild(rect)
   }
 
+  /**
+   * 选中缺陷的图片浮标:从框边拉一条引线,线头挂一张缺陷图。
+   *
+   * 卡片默认放在框的右上;右边放不下换左边,上面放不下换下面。最后再夹回画布,
+   * 免得贴着边缘的缺陷把图挂到画布外面(SVG 是 overflow:hidden,那样就看不见了)。
+   *
+   * 引线两端分别取「框上离卡片最近的点」和「卡片上离框最近的点」,斜着连过去;
+   * 这样无论卡片落在哪个方向,线都不会穿过卡片或从框中间冒出来。
+   */
+  function drawCallout(
+    transform: ReturnType<typeof imageToScreenTransform> & object,
+    visible: Rect,
+  ) {
+    calloutLayer.replaceChildren()
+    if (!selectedDefectId) return
+
+    const selected = defects.find((defect) => defect.id === selectedDefectId)
+    if (!selected) return
+
+    // 框完全在视野外时不画:引线没有起点,浮标钉在画布边缘只会让人以为框在那儿
+    if (
+      selected.x + selected.w < visible.x ||
+      selected.x > visible.x + visible.w ||
+      selected.y + selected.h < visible.y ||
+      selected.y > visible.y + visible.h
+    ) {
+      return
+    }
+
+    const host = getContainer()
+    const width = host?.clientWidth ?? 0
+    const height = host?.clientHeight ?? 0
+    if (width <= 0 || height <= 0) return
+
+    const color = selected.pcsKey === 0 ? DEFECT_GLOBAL_COLOR : DEFECT_COLOR
+    const boxX = transform.x(selected.x)
+    const boxY = transform.y(selected.y)
+    // 缩到很小时框会变成亚像素,给一个最小尺寸,不然引线的起点会抖
+    const boxW = Math.max(transform.x(selected.x + selected.w) - boxX, 2)
+    const boxH = Math.max(transform.y(selected.y + selected.h) - boxY, 2)
+    const boxRight = boxX + boxW
+    const boxBottom = boxY + boxH
+    const boxCenterX = boxX + boxW / 2
+    const boxCenterY = boxY + boxH / 2
+
+    // 浮标跟着画面缩放一起变小。缩到看整版时还挂一张固定大图,会盖住半张版图;
+    // 放大到 1:1 以上则封顶,不跟着无限长。
+    const scale = Math.abs(transform.scaleX)
+    const size = clampNumber(CALLOUT_MAX_SIZE * scale, CALLOUT_MIN_SIZE, CALLOUT_MAX_SIZE)
+    const gap = clampNumber(CALLOUT_GAP * scale, CALLOUT_MIN_GAP, CALLOUT_GAP)
+
+    const roomRight = boxRight + gap + size <= width - CALLOUT_MARGIN
+    const cardOnRight = roomRight || boxCenterX < width / 2
+    let cardLeft = cardOnRight ? boxRight + gap : boxX - gap - size
+
+    const roomAbove = boxY - gap - size >= CALLOUT_MARGIN
+    const roomBelow = boxBottom + gap + size <= height - CALLOUT_MARGIN
+    let cardTop = roomAbove ? boxY - gap - size : boxBottom + gap
+    if (!roomAbove && !roomBelow) {
+      // 上下都放不下(框很大或画布很矮):优先放下面,再夹回画布
+      cardTop = boxBottom + gap
+    }
+
+    cardLeft = clampNumber(
+      cardLeft,
+      CALLOUT_MARGIN,
+      Math.max(CALLOUT_MARGIN, width - size - CALLOUT_MARGIN),
+    )
+    cardTop = clampNumber(
+      cardTop,
+      CALLOUT_MARGIN,
+      Math.max(CALLOUT_MARGIN, height - size - CALLOUT_MARGIN),
+    )
+    const cardRight = cardLeft + size
+    const cardBottom = cardTop + size
+
+    // 框上离卡片中心最近的点 / 卡片上离框中心最近的点
+    const anchorX = clampNumber(cardLeft + size / 2, boxX, boxRight)
+    const anchorY = clampNumber(cardTop + size / 2, boxY, boxBottom)
+    const tipX = clampNumber(boxCenterX, cardLeft, cardRight)
+    const tipY = clampNumber(boxCenterY, cardTop, cardBottom)
+
+    const fragment = document.createDocumentFragment()
+
+    // 深色描边垫底:版图背景有深有浅,单靠彩色细线在浅色区域会糊掉
+    const halo = document.createElementNS(SVG_NS, 'line')
+    halo.setAttribute('x1', String(anchorX))
+    halo.setAttribute('y1', String(anchorY))
+    halo.setAttribute('x2', String(tipX))
+    halo.setAttribute('y2', String(tipY))
+    halo.setAttribute('stroke', 'rgba(0, 0, 0, 0.55)')
+    halo.setAttribute('stroke-width', '4')
+    fragment.appendChild(halo)
+
+    const leader = document.createElementNS(SVG_NS, 'line')
+    leader.setAttribute('x1', String(anchorX))
+    leader.setAttribute('y1', String(anchorY))
+    leader.setAttribute('x2', String(tipX))
+    leader.setAttribute('y2', String(tipY))
+    leader.setAttribute('stroke', color)
+    leader.setAttribute('stroke-width', '1.5')
+    fragment.appendChild(leader)
+
+    const dot = document.createElementNS(SVG_NS, 'circle')
+    dot.setAttribute('cx', String(anchorX))
+    dot.setAttribute('cy', String(anchorY))
+    dot.setAttribute('r', '3')
+    dot.setAttribute('fill', color)
+    fragment.appendChild(dot)
+
+    const card = document.createElementNS(SVG_NS, 'rect')
+    card.setAttribute('x', String(cardLeft))
+    card.setAttribute('y', String(cardTop))
+    card.setAttribute('width', String(size))
+    card.setAttribute('height', String(size))
+    card.setAttribute('rx', '4')
+    card.setAttribute('fill', CALLOUT_BG)
+    card.setAttribute('stroke', color)
+    card.setAttribute('stroke-width', '1.5')
+    fragment.appendChild(card)
+
+    const current = defectImage?.defectId === selected.id ? defectImage : null
+    if (current?.status === 'ready' && current.dataUrl) {
+      const image = document.createElementNS(SVG_NS, 'image')
+      image.setAttribute('x', String(cardLeft + 2))
+      image.setAttribute('y', String(cardTop + 2))
+      image.setAttribute('width', String(size - 4))
+      image.setAttribute('height', String(size - 4))
+      image.setAttribute('preserveAspectRatio', 'xMidYMid meet')
+      image.setAttribute('href', current.dataUrl)
+      fragment.appendChild(image)
+    } else {
+      const text = document.createElementNS(SVG_NS, 'text')
+      text.setAttribute('x', String(cardLeft + size / 2))
+      text.setAttribute('y', String(cardTop + size / 2))
+      text.setAttribute('text-anchor', 'middle')
+      text.setAttribute('dominant-baseline', 'central')
+      text.setAttribute('font-family', 'ui-monospace, SFMono-Regular, Menlo, monospace')
+      text.setAttribute('font-size', '10')
+      text.setAttribute('fill', current?.status === 'error' ? '#ff7875' : CALLOUT_TEXT)
+      // 卡片会缩到 48px,太长的文案放不下
+      text.textContent = current?.status === 'error' ? '加载失败' : '读取中…'
+      fragment.appendChild(text)
+    }
+
+    calloutLayer.appendChild(fragment)
+  }
+
+  function clampNumber(value: number, min: number, max: number): number {
+    return Math.min(Math.max(value, min), max)
+  }
+
   function line(
     x1: number,
     y1: number | string,
@@ -492,6 +678,7 @@ export function useAnnotationSvg(
     guideLayer?.replaceChildren()
     regionLayer?.replaceChildren()
     draftLayer?.replaceChildren()
+    calloutLayer?.replaceChildren()
     // 图层空了,手柄也跟着没了 —— 不清的话命中检测还在按旧位置响应
     handlePoints = []
   }
@@ -541,6 +728,14 @@ export function useAnnotationSvg(
     setDefects(next: Defect[], selectedId: string | null) {
       defects = next
       selectedDefectId = selectedId
+      draw()
+    },
+    /**
+     * 缺陷图片状态。必须和 setDefects 的 selectedId 配对使用 ——
+     * 浮标只在两边都指向同一条缺陷时才画出来。
+     */
+    setDefectImage(next: DefectImageState | null) {
+      defectImage = next
       draw()
     },
     setGuides(next: Guide[]) {
