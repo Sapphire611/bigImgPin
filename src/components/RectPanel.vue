@@ -523,9 +523,7 @@ function loadFrom(region: Region) {
         <span class="count">{{ guides.length }}</span>
       </h3>
 
-      <p v-if="guides.length === 0" class="empty">
-        双击画面放一条横线,Shift + 双击放竖线。
-      </p>
+      <p v-if="guides.length === 0" class="empty">标注文件里的辅助线会显示在这里。</p>
 
       <template v-else>
         <ul class="list guides">

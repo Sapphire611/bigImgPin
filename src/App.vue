@@ -14,7 +14,6 @@ import {
   imageToViewportRect,
   oneToOneZoom,
   resizeRect,
-  roundCoord,
   screenToImage,
   type HandleId,
   zoomRatio as calcZoomRatio,
@@ -172,7 +171,6 @@ onMounted(async () => {
     element.addEventListener('pointerup', onPointerUp)
     element.addEventListener('pointercancel', onPointerCancel)
     element.addEventListener('pointerleave', onPointerLeave)
-    element.addEventListener('dblclick', onDoubleClick)
 
     const syncZoom = () => {
       zoom.value = calcZoomRatio(viewer)
@@ -190,7 +188,6 @@ onMounted(async () => {
       element.removeEventListener('pointerup', onPointerUp)
       element.removeEventListener('pointercancel', onPointerCancel)
       element.removeEventListener('pointerleave', onPointerLeave)
-      element.removeEventListener('dblclick', onDoubleClick)
       viewer.removeHandler('animation-finish', syncZoom)
       viewer.removeHandler('open', syncZoom)
       viewer.removeHandler('resize', syncZoom)
@@ -503,28 +500,6 @@ function onPointerCancel() {
 function onPointerLeave() {
   cursor.value = null
   syncHandleCursor(null)
-}
-
-/**
- * 双击:在当前位置放一条辅助线,便于对齐。Shift 加竖线,否则加横线。
- *
- * 辅助线颜色**不跟主题走**:它画在图上,不画在界面上,判断依据是「在任意图像内容
- * 上都能看见」,跟界面是深色还是浅色没关系。换主题时标注凭空变色反而是干扰。
- * 侧栏里那个同色的小图标见 --guide。
- */
-function onDoubleClick(event: MouseEvent) {
-  const viewer = viewerApi.viewer.value
-  if (!viewer || !image.value) return
-  const bounds = viewer.element.getBoundingClientRect()
-  const point = screenToImage(viewer, event.clientX - bounds.left, event.clientY - bounds.top)
-  if (!point) return
-
-  const axis = event.shiftKey ? 'x' : 'y'
-  // 和框一样按当前位数收敛:辅助线的标签显示的就是这个值,
-  // 存一个 1234.57 却显示成 1235,读数就没法当准了
-  const raw = axis === 'x' ? point.x : point.y
-  annotations.addGuide({ axis, pos: roundCoord(raw), color: '#ffd666' })
-  event.preventDefault()
 }
 
 // ---------------------------------------------------------------- 快捷键

@@ -243,15 +243,6 @@ export function useAnnotations() {
     commit()
   }
 
-  function addGuide(guide: Guide) {
-    // 同一位置附近重复放只留一条:双击连发很容易在同一个 y 上叠出好几条
-    const kept = guides.value.filter(
-      (g) => !(g.axis === guide.axis && Math.abs(g.pos - guide.pos) < 2),
-    )
-    guides.value = [...kept, guide]
-    commit()
-  }
-
   function removeGuide(index: number) {
     guides.value = guides.value.filter((_, i) => i !== index)
     commit()
@@ -279,7 +270,6 @@ export function useAnnotations() {
     removeRegions,
     renameRegion,
     clearRegions,
-    addGuide,
     removeGuide,
     clearGuides,
     commit,
