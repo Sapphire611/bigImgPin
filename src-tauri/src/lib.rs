@@ -11,6 +11,27 @@ mod vips;
 
 use tauri::Emitter;
 
+/// 打开 WebView 的开发者工具。
+///
+/// Tauri **不会**自动给 F12 / Ctrl+Shift+I 绑定快捷键 —— debug 构建里 devtools
+/// 是编进去了,但得有人主动调 `open_devtools()`。前端按键后调这个命令。
+///
+/// release 构建没编 devtools,命令仍然注册着,返回一句明确的错误,
+/// 而不是让前端拿到「命令不存在」这种看不出原因的消息。
+#[tauri::command]
+fn open_devtools(window: tauri::WebviewWindow) -> Result<(), String> {
+    #[cfg(debug_assertions)]
+    {
+        window.open_devtools();
+        Ok(())
+    }
+    #[cfg(not(debug_assertions))]
+    {
+        let _ = window;
+        Err("开发者工具只在 debug 构建里可用".into())
+    }
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -37,6 +58,7 @@ pub fn run() {
             defect_images::fetch_defect_image,
             export::export_regions_csv,
             export::export_crops,
+            open_devtools,
         ])
         .setup(|app| {
             // 启动就自检 vips,把结果推给前端。

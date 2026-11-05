@@ -26,6 +26,11 @@ export function vipsInfo(): Promise<VipsInfo> {
   return invoke<VipsInfo>('vips_info')
 }
 
+/** 打开开发者工具。只有 debug 构建会真的打开,release 会 reject。 */
+export function openDevtools(): Promise<void> {
+  return invoke<void>('open_devtools')
+}
+
 /** 打开文件对话框。返回绝对路径,取消则返回 null。 */
 export function pickImage(): Promise<string | null> {
   return invoke<string | null>('pick_image')

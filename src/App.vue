@@ -517,6 +517,19 @@ function isTextInput(target: EventTarget | null): boolean {
  * 是在编辑数字,不能顺手把画布上的框也删了。
  */
 function onKeyDown(event: KeyboardEvent) {
+  // 调试器快捷键放在输入框判断之前:焦点在坐标输入框里时也该能开,
+  // 这个键不该被输入框吃掉。Tauri 不自动绑定,得由页面转给 Rust。
+  const debugShortcut =
+    event.key === 'F12' ||
+    ((event.ctrlKey || event.metaKey) && event.shiftKey && event.key.toLowerCase() === 'i')
+  if (debugShortcut) {
+    event.preventDefault()
+    void api.openDevtools().catch((error) => {
+      notice.value = `开发者工具打不开:${String(error)}`
+    })
+    return
+  }
+
   if (isTextInput(event.target)) return
 
   const mod = event.ctrlKey || event.metaKey
