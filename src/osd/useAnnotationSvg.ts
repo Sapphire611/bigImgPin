@@ -22,6 +22,7 @@
 import { onBeforeUnmount } from 'vue'
 import OpenSeadragon from 'openseadragon'
 
+import { rotateReferenceRect } from '../state/referenceRotation'
 import type { Defect, DefectImageState, Guide, PcsBox, Rect, Region } from '../types'
 import { imageToScreenTransform, visibleImageRect, type HandleId } from './coords'
 
@@ -48,6 +49,16 @@ const HANDLE_IDS: HandleId[] = ['nw', 'n', 'ne', 'e', 'se', 's', 'sw', 'w']
  * 和标注的 PALETTE 刻意错开,避免参考框和用户自己画的框看起来是同一类东西。
  */
 const PCS_COLORS = ['#ffd666', '#36cfc9', '#ff85c0', '#91d5ff']
+
+/**
+ * tid 是上游给的字符串编号(`"p_13"`、`"A30"`,个别产品是数字),没有
+ * 数值语义,所以取一个稳定散列来选颜色,不能像以前那样直接取模。
+ */
+function pcsColor(tid: string): string {
+  let hash = 0
+  for (let i = 0; i < tid.length; i++) hash = (hash * 31 + tid.charCodeAt(i)) | 0
+  return PCS_COLORS[Math.abs(hash) % PCS_COLORS.length]
+}
 
 /**
  * 缺陷框:板内缺陷红色,面板级「全局点」琥珀色。
@@ -95,6 +106,11 @@ export function useAnnotationSvg(
   let regions: Region[] = []
   let pcs: PcsBox[] = []
   let defects: Defect[] = []
+  /** 参考层(PCS/缺陷)的旋转角。只影响这两层,标注和网格始终在图像坐标系里。 */
+  let referenceRotationDegrees = 0
+  /** 参考坐标画布的尺寸(gerber_size × panelScale),旋转绕它的中心。 */
+  let referenceCanvasWidth = 0
+  let referenceCanvasHeight = 0
   let selectedDefectId: string | null = null
   /** 选中缺陷的图片状态。由 App 在 Fetch 前后传进来,和 selectedDefectId 配对使用。 */
   let defectImage: DefectImageState | null = null
@@ -253,7 +269,7 @@ export function useAnnotationSvg(
   }
 
   /**
-   * PCS 分布:只读参考框 + 框中央的 PCS id。
+   * PCS 分布:只读参考框 + 框中央的料号(tid)。
    *
    * 线宽用 1.5 而不是和标注一样的 2:这两层会叠在一起,粗细一样就分不清
    * 哪个是文件里的、哪个是自己画的。文字用深色描边打底,是为了在亮色板面
@@ -265,11 +281,17 @@ export function useAnnotationSvg(
 
     const fragment = document.createDocumentFragment()
     for (const box of pcs) {
-      const x = transform.x(box.x)
-      const y = transform.y(box.y)
-      const width = transform.x(box.x + box.w) - x
-      const height = transform.y(box.y + box.h) - y
-      const color = PCS_COLORS[Math.abs(box.tid) % PCS_COLORS.length]
+      const boxRect = rotateReferenceRect(
+        box,
+        referenceRotationDegrees,
+        referenceCanvasWidth,
+        referenceCanvasHeight,
+      )
+      const x = transform.x(boxRect.x)
+      const y = transform.y(boxRect.y)
+      const width = transform.x(boxRect.x + boxRect.w) - x
+      const height = transform.y(boxRect.y + boxRect.h) - y
+      const color = pcsColor(box.tid)
 
       const rect = document.createElementNS(SVG_NS, 'rect')
       rect.setAttribute('x', String(x))
@@ -293,7 +315,8 @@ export function useAnnotationSvg(
       label.setAttribute('stroke', 'rgba(0, 0, 0, 0.6)')
       label.setAttribute('stroke-width', '3')
       label.setAttribute('paint-order', 'stroke')
-      label.textContent = String(box.id)
+      // 显示上游的料号/拼板编号(tid),不是列表序号(id)
+      label.textContent = box.tid
       fragment.appendChild(label)
     }
     pcsLayer.appendChild(fragment)
@@ -318,25 +341,33 @@ export function useAnnotationSvg(
     const normal: string[] = []
     const global: string[] = []
     let selected: Defect | null = null
+    let selectedRect: Rect | null = null
 
     for (const defect of defects) {
+      const rect = rotateReferenceRect(
+        defect,
+        referenceRotationDegrees,
+        referenceCanvasWidth,
+        referenceCanvasHeight,
+      )
       if (defect.id === selectedDefectId) {
         selected = defect
+        selectedRect = rect
         continue
       }
       if (
-        defect.x + defect.w < visible.x ||
-        defect.x > visible.x + visible.w ||
-        defect.y + defect.h < visible.y ||
-        defect.y > visible.y + visible.h
+        rect.x + rect.w < visible.x ||
+        rect.x > visible.x + visible.w ||
+        rect.y + rect.h < visible.y ||
+        rect.y > visible.y + visible.h
       ) {
         continue
       }
 
-      const x = transform.x(defect.x)
-      const y = transform.y(defect.y)
-      const right = transform.x(defect.x + defect.w)
-      const bottom = transform.y(defect.y + defect.h)
+      const x = transform.x(rect.x)
+      const y = transform.y(rect.y)
+      const right = transform.x(rect.x + rect.w)
+      const bottom = transform.y(rect.y + rect.h)
       ;(defect.pcsKey === 0 ? global : normal).push(`M${x} ${y}H${right}V${bottom}H${x}Z`)
     }
 
@@ -346,12 +377,12 @@ export function useAnnotationSvg(
       fragment.appendChild(defectPath(global.join(''), DEFECT_GLOBAL_COLOR))
     }
 
-    if (selected) {
+    if (selected && selectedRect) {
       const color = selected.pcsKey === 0 ? DEFECT_GLOBAL_COLOR : DEFECT_COLOR
-      const x = transform.x(selected.x)
-      const y = transform.y(selected.y)
-      const width = transform.x(selected.x + selected.w) - x
-      const height = transform.y(selected.y + selected.h) - y
+      const x = transform.x(selectedRect.x)
+      const y = transform.y(selectedRect.y)
+      const width = transform.x(selectedRect.x + selectedRect.w) - x
+      const height = transform.y(selectedRect.y + selectedRect.h) - y
 
       const rect = document.createElementNS(SVG_NS, 'rect')
       rect.setAttribute('x', String(x))
@@ -363,22 +394,6 @@ export function useAnnotationSvg(
       rect.setAttribute('stroke', color)
       rect.setAttribute('stroke-width', '3')
       fragment.appendChild(rect)
-
-      // 只在选中时显示文字:几百个缺陷都挂标签会把 PCS 编号和版图一起盖住
-      const label = document.createElementNS(SVG_NS, 'text')
-      label.setAttribute('x', String(x))
-      // 顶部空间不够就画进框里,免得标签被画布边缘切掉
-      label.setAttribute('y', String(y > 16 ? y - 6 : y + 14))
-      label.setAttribute('font-family', 'ui-monospace, SFMono-Regular, Menlo, monospace')
-      label.setAttribute('font-size', '12')
-      label.setAttribute('fill', color)
-      label.setAttribute('stroke', 'rgba(0, 0, 0, 0.65)')
-      label.setAttribute('stroke-width', '3')
-      label.setAttribute('paint-order', 'stroke')
-      const pcsText = selected.pcsKey === 0 ? '全局点' : `PCS ${selected.pcsKey}`
-      const labelText = selected.label ? `${selected.code} ${selected.label}` : selected.code
-      label.textContent = `${pcsText} · ${labelText} · #${selected.defectIndex}`
-      fragment.appendChild(label)
     }
 
     defectLayer.appendChild(fragment)
@@ -495,12 +510,19 @@ export function useAnnotationSvg(
     const selected = defects.find((defect) => defect.id === selectedDefectId)
     if (!selected) return
 
+    const rect = rotateReferenceRect(
+      selected,
+      referenceRotationDegrees,
+      referenceCanvasWidth,
+      referenceCanvasHeight,
+    )
+
     // 框完全在视野外时不画:引线没有起点,浮标钉在画布边缘只会让人以为框在那儿
     if (
-      selected.x + selected.w < visible.x ||
-      selected.x > visible.x + visible.w ||
-      selected.y + selected.h < visible.y ||
-      selected.y > visible.y + visible.h
+      rect.x + rect.w < visible.x ||
+      rect.x > visible.x + visible.w ||
+      rect.y + rect.h < visible.y ||
+      rect.y > visible.y + visible.h
     ) {
       return
     }
@@ -511,11 +533,11 @@ export function useAnnotationSvg(
     if (width <= 0 || height <= 0) return
 
     const color = selected.pcsKey === 0 ? DEFECT_GLOBAL_COLOR : DEFECT_COLOR
-    const boxX = transform.x(selected.x)
-    const boxY = transform.y(selected.y)
+    const boxX = transform.x(rect.x)
+    const boxY = transform.y(rect.y)
     // 缩到很小时框会变成亚像素,给一个最小尺寸,不然引线的起点会抖
-    const boxW = Math.max(transform.x(selected.x + selected.w) - boxX, 2)
-    const boxH = Math.max(transform.y(selected.y + selected.h) - boxY, 2)
+    const boxW = Math.max(transform.x(rect.x + rect.w) - boxX, 2)
+    const boxH = Math.max(transform.y(rect.y + rect.h) - boxY, 2)
     const boxRight = boxX + boxW
     const boxBottom = boxY + boxH
     const boxCenterX = boxX + boxW / 2
@@ -621,6 +643,25 @@ export function useAnnotationSvg(
       fragment.appendChild(text)
     }
 
+    // 只在选中时显示文字:几百个缺陷都挂标签会把 PCS 编号和版图一起盖住。
+    // 浮标占哪一侧,标签就放到另一侧 —— 否则缺陷图正好压在文字上。
+    const label = document.createElementNS(SVG_NS, 'text')
+    label.setAttribute('x', String(boxX))
+    label.setAttribute(
+      'y',
+      String(clampNumber(cardTop < boxY ? boxBottom + 16 : boxY - 6, 14, height - 4)),
+    )
+    label.setAttribute('font-family', 'ui-monospace, SFMono-Regular, Menlo, monospace')
+    label.setAttribute('font-size', '12')
+    label.setAttribute('fill', color)
+    label.setAttribute('stroke', 'rgba(0, 0, 0, 0.65)')
+    label.setAttribute('stroke-width', '3')
+    label.setAttribute('paint-order', 'stroke')
+    const pcsText = selected.pcsKey === 0 ? '全局点' : `PCS ${selected.pcsKey}`
+    const labelText = selected.label ? `${selected.code} ${selected.label}` : selected.code
+    label.textContent = `${pcsText} · ${labelText} · #${selected.defectIndex}`
+    fragment.appendChild(label)
+
     calloutLayer.appendChild(fragment)
   }
 
@@ -722,6 +763,17 @@ export function useAnnotationSvg(
     },
     setPcs(next: PcsBox[]) {
       pcs = next
+      draw()
+    },
+    /**
+     * 参考层旋转角(度)和参考画布尺寸。PCS 和缺陷一起转,标注、网格始终在
+     * 图像坐标系里。画布尺寸要跟着传:90/270 是绕画布中心转并把宽高互换,
+     * 不能拿图片尺寸顶替(例子见 state/referenceRotation.ts)。
+     */
+    setReferenceRotation(next: number, canvasWidth: number, canvasHeight: number) {
+      referenceRotationDegrees = next
+      referenceCanvasWidth = canvasWidth
+      referenceCanvasHeight = canvasHeight
       draw()
     },
     /** 缺陷和选中项一起传:选中变化只触发一次重绘 */

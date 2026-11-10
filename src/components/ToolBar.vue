@@ -15,6 +15,10 @@ defineProps<{
   hasPcs: boolean
   pcsVisible: boolean
   pcsCount: number
+  /** 画布上有没有参考层(PCS 或缺陷),旋转按钮据此禁用 */
+  hasReference: boolean
+  /** 参考层当前旋转角,单位度 */
+  referenceRotation: number
 }>()
 
 const emit = defineEmits<{
@@ -22,6 +26,8 @@ const emit = defineEmits<{
   'update:mode': [ToolMode]
   'update:gridEnabled': [boolean]
   'update:pcsVisible': [boolean]
+  /** 参考层旋转增量:±90,或传当前角的相反数复位 */
+  rotateReference: [number]
   zoomToFit: []
   zoomToOne: []
   undo: []
@@ -111,6 +117,40 @@ const emit = defineEmits<{
           <rect x="9" y="9" width="5" height="5" rx="0.5" />
         </svg>
         PCS
+      </button>
+    </div>
+
+    <!--
+      参考层旋转:PCS 和缺陷是同一套 gerber 坐标,所以一起转。
+      图片和标注不跟着转 —— 目的是把参考框手动对到扫描图上。
+    -->
+    <div class="track" role="group" aria-label="参考层旋转">
+      <button
+        :disabled="!hasReference"
+        title="参考层逆时针旋转 90°"
+        @click="emit('rotateReference', -90)"
+      >
+        <svg viewBox="0 0 16 16" aria-hidden="true">
+          <path d="M3.2 10.8A5.5 5.5 0 1 0 4 4.6" />
+          <path d="M2.2 2.6v4.4h4.4" />
+        </svg>
+      </button>
+      <button
+        :disabled="!hasReference"
+        :title="`当前参考层旋转 ${referenceRotation}°,点击复位`"
+        @click="emit('rotateReference', -referenceRotation)"
+      >
+        {{ referenceRotation }}°
+      </button>
+      <button
+        :disabled="!hasReference"
+        title="参考层顺时针旋转 90°"
+        @click="emit('rotateReference', 90)"
+      >
+        <svg viewBox="0 0 16 16" aria-hidden="true">
+          <path d="M12.8 10.8A5.5 5.5 0 1 1 12 4.6" />
+          <path d="M13.8 2.6v4.4h-4.4" />
+        </svg>
       </button>
     </div>
 

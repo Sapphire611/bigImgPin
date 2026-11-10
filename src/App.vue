@@ -21,6 +21,13 @@ import {
 import { useAnnotationSvg } from './osd/useAnnotationSvg'
 import { modeCursor, useViewer } from './osd/useViewer'
 import { minioBases, minioRevision } from './state/minioPrefs'
+import {
+  pointToReference,
+  referenceRotation,
+  rotateReferenceBy,
+  rotateReferenceRect,
+  setReferenceRotationFor,
+} from './state/referenceRotation'
 import { sliceParams } from './state/slicePrefs'
 import { useAnnotations } from './state/useAnnotations'
 import type {
@@ -79,6 +86,11 @@ const hasPcs = computed(() => (pcsLayout.value?.pcs.length ?? 0) > 0)
 const defectSet = ref<DefectSet | null>(null)
 const selectedDefectId = ref<string | null>(null)
 
+/** 画布上有 PCS 或缺陷,旋转按钮才有意义 */
+const hasReference = computed(
+  () => hasPcs.value || (defectSet.value?.defects.length ?? 0) > 0,
+)
+
 /**
  * 当前选中缺陷的图片。缺陷本身只读,图片也一样 —— 取失败就显示原因,
  * 不弹全局错误横幅:那多半是 MinIO 地址没配对,不是应用坏了。
@@ -119,6 +131,12 @@ watch([defectSet, selectedDefectId], () => {
 // 缺陷图到了/失败了都重画浮标。浮标只认 defectId 与选中项相同的那一张,
 // 所以这里不需要再判断一次选中状态。
 watch(defectImage, (value) => overlay.setDefectImage(value))
+// 参考层旋转只影响 PCS/缺陷,标注和网格不跟着转。
+// 画布尺寸也要一起送:旋转绕的是 gerber 画布中心,不是图片中心。
+watch([referenceRotation, pcsLayout, image], () => {
+  const size = referenceCanvasSize()
+  overlay.setReferenceRotation(referenceRotation.value, size.width, size.height)
+})
 // 选中标注时清掉缺陷选中。两套高亮不能同时存在:那种状态下按 Delete
 // 删掉的是标注框,而用户可能以为删的是缺陷
 watch(selectedIds, (value) => {
@@ -161,6 +179,8 @@ const cleanups: Array<() => void> = []
 onMounted(async () => {
   viewerApi.init()
   overlay.mount()
+  const referenceSize = referenceCanvasSize()
+  overlay.setReferenceRotation(referenceRotation.value, referenceSize.width, referenceSize.height)
 
   const viewer = viewerApi.viewer.value
   if (viewer) {
@@ -777,6 +797,7 @@ function onCacheCleared() {
   annotationFile.value = null
   annotationWarning.value = null
   // PCS 和缺陷都跟着图走:图关了,参考框也不该留在画布上
+  setReferenceRotationFor(null)
   pcsLayout.value = null
   defectSet.value = null
   selectedDefectId.value = null
@@ -789,16 +810,38 @@ function onCacheCleared() {
 
 // ---------------------------------------------------------------- 缺陷
 
-/** 命中最上面的缺陷框。缺陷按列表顺序绘制,所以从后往前找。 */
+/**
+ * 参考层的坐标画布尺寸。PCS 文件里有 `gerber_size` 时以它为准 ——
+ * 图片可能是这份画布转了 90° 后的样子,尺寸并不相同。
+ * 老文件没有 gerber_size 才退回图片尺寸。
+ */
+function referenceCanvasSize(): { width: number; height: number } {
+  const layout = pcsLayout.value
+  if (layout && layout.width > 0 && layout.height > 0) {
+    return { width: layout.width, height: layout.height }
+  }
+  const current = image.value
+  return { width: current?.width ?? 0, height: current?.height ?? 0 }
+}
+
+/**
+ * 命中最上面的缺陷框。缺陷按列表顺序绘制,所以从后往前找。
+ *
+ * 缺陷框可能按参考层角度转着画(见 state/referenceRotation.ts),点击点要先
+ * 逆变换回原始坐标再比 —— 否则框在屏幕上转了 90°,点击还按老位置算。
+ */
 function findDefectAt(x: number, y: number): Defect | null {
+  if (!image.value) return null
+  const size = referenceCanvasSize()
+  const point = pointToReference(x, y, referenceRotation.value, size.width, size.height)
   const list = defectSet.value?.defects ?? []
   for (let i = list.length - 1; i >= 0; i -= 1) {
     const defect = list[i]
     if (
-      x >= defect.x &&
-      x <= defect.x + defect.w &&
-      y >= defect.y &&
-      y <= defect.y + defect.h
+      point.x >= defect.x &&
+      point.x <= defect.x + defect.w &&
+      point.y >= defect.y &&
+      point.y <= defect.y + defect.h
     ) {
       return defect
     }
@@ -887,8 +930,16 @@ function retryDefectImage() {
  */
 function focusDefect(defect: Defect) {
   const viewer = viewerApi.viewer.value
-  if (!viewer) return
-  const bounds = imageToViewportRect(viewer, defect)
+  if (!viewer || !image.value) return
+  // 定位的是屏幕上画出来的位置,所以要跟着参考层一起转
+  const size = referenceCanvasSize()
+  const rect = rotateReferenceRect(
+    defect,
+    referenceRotation.value,
+    size.width,
+    size.height,
+  )
+  const bounds = imageToViewportRect(viewer, rect)
   const native = oneToOneZoom(viewer)
   if (!bounds || native == null) return
 
@@ -989,6 +1040,8 @@ async function loadPath(path: string, restoring = false) {
     ])
     image.value = prepared
     applyAnnotations(loaded, prepared)
+    // 参考层的旋转角按图记住:同一张图重开还在,换图则回到这张图自己的值
+    setReferenceRotationFor(prepared.sourcePath)
     pcsLayout.value = pcs.layout
     // 缺陷属于上一张图,不能跟着新图一起留着
     defectSet.value = null
@@ -1038,6 +1091,11 @@ function onGridToggle(enabled: boolean) {
   gridEnabled.value = enabled
   overlay.setGrid({ enabled })
 }
+
+/** 参考层转 90°。角度按当前图路径记住,换图不会把上一个产品的角度带过来。 */
+function rotateReference(delta: number) {
+  rotateReferenceBy(image.value?.sourcePath ?? null, delta)
+}
 </script>
 
 <template>
@@ -1052,10 +1110,13 @@ function onGridToggle(enabled: boolean) {
       :has-pcs="hasPcs"
       :pcs-visible="pcsVisible"
       :pcs-count="pcsLayout?.pcs.length ?? 0"
+      :has-reference="hasReference"
+      :reference-rotation="referenceRotation"
       @open="openImage"
       @update:mode="setMode"
       @update:grid-enabled="onGridToggle"
       @update:pcs-visible="pcsVisible = $event"
+      @rotate-reference="rotateReference($event)"
       @zoom-to-fit="zoomToFit"
       @zoom-to-one="zoomToOne"
       @undo="annotations.undo"
