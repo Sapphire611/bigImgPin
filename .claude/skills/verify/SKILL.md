@@ -96,6 +96,19 @@ setupState.loadPath('C:/Users/.../测试图.tif')
    裁完读回像素值就能证明**取到的是哪一块**(只比对尺寸抓不住参数顺序写反)。
    注意 `--csize N` 会把高度变成 H×N(libvips 把第三维摞在高度上),建完用
    `vipsheader -a` 核一下再往下走。
+8. **验完必须按 PID 杀掉 `vite` 和 debug 客户端。** 停掉后台任务或 Ctrl+C 父 shell
+   **不会**带走子进程:残留的 `vite` 继续占着 1420,下次启动直接报
+   `Port 1420 is already in use`;残留的 `target/debug/bigimgpin.exe` 还会锁住文件,
+   让下一次 `cargo build` 链接失败。先查再杀:
+
+   ```bash
+   netstat -ano | grep -i ":1420.*LISTENING"   # 最后一列是 PID
+   taskkill //PID <pid> //F                    # git-bash 里要双斜杠
+   tasklist | grep -i bigimgpin
+   taskkill //IM bigimgpin.exe //F
+   ```
+
+   2026-11-10 就因此让 `npm run dev` 起不来一次。
 
 ## 五、够不着的地方(这些才找人)
 
