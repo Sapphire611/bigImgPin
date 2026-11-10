@@ -82,14 +82,22 @@ export interface Region extends Rect {
  * 撤销和落盘,所以单独一个类型,不和 Region 混用。
  */
 export interface PcsBox extends Rect {
-  /** `single_pcs_list[].id`,画在框中间的数字 */
+  /** `single_pcs_list[].id`,列表序号,不再画在框上 */
   id: number
-  /** 所属的料/拼板编号,用来配色 */
-  tid: number
+  /** 料号/拼板编号,用来配色并显示在框中央。上游有 `"p_13"`/`"A30"` 也有数字 `0` */
+  tid: string
 }
 
 export interface PcsLayout {
   panelScale: number
+  /**
+   * 参考坐标画布尺寸(`gerber_size × panelScale`),图像像素。
+   * 手动旋转参考层时绕这个画布的中心转 —— 有的产品图片本身是 gerber
+   * 转了 90°,图片尺寸和画布尺寸是宽高互换的。
+   * 文件里没有 gerber_size 时为 0。
+   */
+  width: number
+  height: number
   pcs: PcsBox[]
 }
 
