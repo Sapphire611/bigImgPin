@@ -248,6 +248,7 @@ dependencies = [
  "libc",
  "percent-encoding",
  "reqwest",
+ "rustls",
  "serde",
  "serde_json",
  "tauri",

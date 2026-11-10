@@ -29,6 +29,10 @@ tauri-plugin-process = "2.3.1"
 # 缺陷图要从 MinIO 取:zip 内图片必须带 x-minio-extract 请求头,<img> 设不了。
 # reqwest 本来就在更新插件的依赖树里,这里只是直接用它;minio 是 http,不需要 TLS。
 reqwest = { version = "0.13", default-features = false }
+# 注意:tauri-plugin-updater 打开的是 reqwest 的 `rustls-no-provider`,**即使只访问
+# http**,建 Client 时也会初始化 rustls;全局没有 crypto provider 就直接 panic。
+# 这里把 rustls 暴露出来,在 run() 开头装一个默认 provider(见 lib.rs)。
+rustls = { version = "0.23", default-features = false, features = ["ring", "std"] }
 base64 = "0.22"
 percent-encoding = "2"
 

@@ -32,8 +32,23 @@ fn open_devtools(window: tauri::WebviewWindow) -> Result<(), String> {
     }
 }
 
+/// 装一个全局 rustls crypto provider。
+///
+/// 必须排在任何 reqwest Client 构建之前(包括插件初始化):tauri-plugin-updater
+/// 把 reqwest 配成了 `rustls-no-provider`,没有全局 provider 时
+/// `Client::builder().build()` 会 **panic**,不是返回错误。缺陷图请求走的正是
+/// reqwest —— 少了这一步,前端会永远停在「正在读取缺陷图…」,而且看不到任何错误。
+/// (2026-11-10 就是这个问题。)
+///
+/// ring 已经由 updater 编进依赖树,复用它,不再拉一份 aws-lc-rs。
+fn install_crypto_provider() {
+    let _ = rustls::crypto::ring::default_provider().install_default();
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    install_crypto_provider();
+
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
@@ -83,4 +98,14 @@ pub fn run() {
         })
         .run(tauri::generate_context!())
         .expect("启动 Tauri 应用失败");
+}
+
+#[cfg(test)]
+mod tests {
+    /// 没装 provider 时这个 build 会 panic —— 回归测试守着「缺陷图又永远转圈」。
+    #[test]
+    fn reqwest_client_can_be_built() {
+        super::install_crypto_provider();
+        reqwest::Client::builder().build().unwrap();
+    }
 }
