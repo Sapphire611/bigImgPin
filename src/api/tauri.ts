@@ -6,6 +6,7 @@ import { check } from '@tauri-apps/plugin-updater'
 import type {
   CropOutcome,
   CropProgress,
+  DefectImageFailure,
   DefectImageResult,
   DefectSet,
   ExportRect,
@@ -83,7 +84,8 @@ export function loadDefects(path: string, panelScale: number): Promise<DefectSet
  * 从 MinIO 取一张缺陷图。
  *
  * 走 Rust 而不是前端 fetch:zip 内图片需要 `x-minio-extract` 请求头,`<img>` 设不了;
- * 顺带也绕开 WebView 的 CORS 差异。`prefixes` / `bases` 都是候选,命中为止,
+ * 顺带也绕开 WebView 的 CORS 差异。`prefixes` 是候选;`bases` 通常只有一个
+ * (缺陷文件声明了数据在哪套 MinIO 上),只有文件没写来源时才是两套。
  * 返回值里带着实际命中的那一组,前端可以缓存。
  */
 export function fetchDefectImage(
@@ -93,6 +95,21 @@ export function fetchDefectImage(
   bases: string[],
 ): Promise<DefectImageResult> {
   return invoke<DefectImageResult>('fetch_defect_image', { image, bucket, prefixes, bases })
+}
+
+/**
+ * `invoke` 的 reject 值不一定是字符串:`fetch_defect_image` 失败时是
+ * `{ url, message }`。统一收成固定形状,调用方不用自己判类型。
+ */
+export function asDefectImageFailure(error: unknown): DefectImageFailure {
+  if (typeof error === 'object' && error !== null) {
+    const value = error as { url?: unknown; message?: unknown }
+    return {
+      url: typeof value.url === 'string' && value.url ? value.url : null,
+      message: typeof value.message === 'string' ? value.message : String(error),
+    }
+  }
+  return { url: null, message: String(error) }
 }
 
 // ---------------------------------------------------------------- 标注

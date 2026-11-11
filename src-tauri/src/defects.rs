@@ -18,6 +18,10 @@
 //! 文件里存的是相对面板目录的 key,要拼上 MinIO 地址才能取。面板 JSON 在 MinIO
 //! 上的 key 前缀并不总等于 `local_describe_path`(导入工具会改前缀),所以这里
 //! 同时给出几组候选前缀,由 `defect_images` 逐个试。
+//!
+//! 缺陷图落在哪套 MinIO 上,文件自己写着:`local_describe_*` 是 `minio://` 的
+//! 是新数据,是本地盘路径的是旧数据。这个判断以 `minio_kind` 一起交给前端,
+//! 只请求对应的那一套 —— 别的机器上未必新旧两套都部署了。
 
 use serde::{Deserialize, Serialize};
 use std::path::Path;
@@ -47,6 +51,19 @@ pub struct Defect {
     pub image: Option<String>,
 }
 
+/// 这份数据属于哪一侧的 MinIO。面板 JSON 自己写了答案:
+/// `local_describe_*` 是 `minio://` 开头的是新数据,是本地盘路径的是旧数据。
+///
+/// 必须按这个来选地址,不能「两套都试」——别的机器上可能只部署了其中一套,
+/// 去连不存在的那套只会白等超时。两个字段都没有的老文件返回 None,
+/// 前端才退回「两套都试」的兜底。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum MinioKind {
+    New,
+    Old,
+}
+
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DefectSet {
@@ -56,6 +73,8 @@ pub struct DefectSet {
     pub defects: Vec<Defect>,
     /// 图片所在的 bucket。目前见到的都是 deepiresults,但 `minio://` 路径里写了什么就用什么。
     pub bucket: String,
+    /// 该走哪套 MinIO;文件没写明来源时是 None
+    pub minio_kind: Option<MinioKind>,
     /// 拼图片 key 时依次尝试的目录前缀(相对 bucket)。真实前缀常常被导入工具改过,
     /// 见本文件顶部注释。
     pub key_prefixes: Vec<String>,
@@ -136,6 +155,20 @@ fn normalize_slashes(path: &str) -> String {
         .trim()
         .trim_matches('/')
         .to_string()
+}
+
+/// 从 `local_describe_*` 判断数据落在哪套 MinIO。优先看 `local_describe_path`,
+/// 它通常是更具体的那一个;两个都空时才返回 None。
+fn detect_minio_kind(local_dir: &str, local_path: &str) -> Option<MinioKind> {
+    let declared = [local_path, local_dir]
+        .iter()
+        .map(|value| value.trim())
+        .find(|value| !value.is_empty())?;
+    if declared.to_ascii_lowercase().starts_with("minio://") {
+        Some(MinioKind::New)
+    } else {
+        Some(MinioKind::Old)
+    }
 }
 
 /// `minio://<bucket>/<key>` 里的 bucket。不是这个写法就返回 None。
@@ -301,6 +334,7 @@ fn parse_defects(text: &str, panel_scale: f64, source: &Path) -> Result<DefectSe
 
     let bucket = bucket_from_minio_path(&raw.local_describe_path)
         .unwrap_or_else(|| "deepiresults".to_string());
+    let minio_kind = detect_minio_kind(&raw.local_describe_dir, &raw.local_describe_path);
     let key_prefixes = image_key_prefixes(
         source,
         &raw.local_describe_dir,
@@ -375,6 +409,7 @@ fn parse_defects(text: &str, panel_scale: f64, source: &Path) -> Result<DefectSe
         panel_id: raw.panel_id,
         defects,
         bucket,
+        minio_kind,
         key_prefixes,
     })
 }
@@ -466,6 +501,40 @@ mod tests {
         assert!((pcs.w - 51.2).abs() < 1e-9);
         assert_eq!(set.product_serial, "P1");
         assert_eq!(set.side_index, "A");
+        assert_eq!(set.minio_kind, Some(MinioKind::New));
+    }
+
+    #[test]
+    fn minio_kind_follows_the_local_describe_scheme() {
+        // 新数据:minio:// 路径
+        assert_eq!(
+            detect_minio_kind("", "minio://deepiresults/20261106/a/panel.json"),
+            Some(MinioKind::New)
+        );
+        // 旧数据:本地盘路径(大小写不同的盘符也一样)
+        assert_eq!(
+            detect_minio_kind(
+                r"E:\minio\deepiresults\20260129\a",
+                "E:/minio/deepiresults/20260129/a/panel.json"
+            ),
+            Some(MinioKind::Old)
+        );
+        assert_eq!(
+            detect_minio_kind("e:/minio/deepiresults/a", ""),
+            Some(MinioKind::Old)
+        );
+        // 两个字段都缺失时不猜,交给前端兜底
+        assert_eq!(detect_minio_kind("", ""), None);
+    }
+
+    #[test]
+    fn defect_set_serializes_minio_kind_for_the_frontend() {
+        // 契约测试:字段名或取值变了,前端不会报错,只会静默退回「两套都试」
+        let set = parse(SAMPLE, 0.1).unwrap();
+        assert_eq!(serde_json::to_value(&set).unwrap()["minioKind"], "new");
+
+        let set = parse(r#"{ "panel_info": { "defect_info": [] } }"#, 1.0).unwrap();
+        assert!(serde_json::to_value(&set).unwrap()["minioKind"].is_null());
     }
 
     #[test]

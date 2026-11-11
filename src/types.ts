@@ -132,6 +132,11 @@ export interface DefectSet {
   /** 图片所在的 MinIO bucket,通常 deepiresults */
   bucket: string
   /**
+   * 这份数据该走哪套 MinIO。由 `local_describe_*` 的写法决定:
+   * `minio://` 开头 = 新,本地盘路径 = 旧。文件没写明时是 null。
+   */
+  minioKind: 'new' | 'old' | null
+  /**
    * 拼图片 key 时依次尝试的目录前缀。面板在 MinIO 上的真实前缀常被导入工具
    * 改过,和 JSON 里的 local_describe_path 对不上,所以给一组候选。
    */
@@ -148,6 +153,17 @@ export interface DefectImageResult {
   base: string
   /** 命中的 key 前缀;图片路径原样命中时是空串 */
   prefix: string
+}
+
+/**
+ * 缺陷图片取不到时的 reject 形状(对应 Rust 的 `DefectImageError`)。
+ * 只带一个地址 —— 用户要的是能贴进浏览器的那一条,不是全部候选。
+ */
+export interface DefectImageFailure {
+  /** 候选里的第一个地址;没有可用的 MinIO 地址时为 null */
+  url: string | null
+  /** 一句话的失败原因 */
+  message: string
 }
 
 /** 右侧面板里缺陷图的显示状态。 */

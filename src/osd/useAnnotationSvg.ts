@@ -68,6 +68,31 @@ const DEFECT_COLOR = '#ff4d4f'
 const DEFECT_GLOBAL_COLOR = '#ffa940'
 
 /**
+ * 缺陷框在屏幕上短于这个尺寸时,改画一个固定大小的十字。
+ *
+ * ROI 只有几十个图像像素,缩到看整版时框不足 1 个屏幕像素 —— 框画了等于没画,
+ * 人也就不知道点在哪里。十字是屏幕空间的,缩放时大小不变;深色描边垫底,
+ * 否则 1px 的亮线压在版图的细密结构上会糊掉。命中判定(`App.vue` 的
+ * `DEFECT_HIT_SLOP`)按同样的屏幕尺度放宽,看得见就点得中。
+ */
+const DEFECT_MARKER_MIN_PX = 10
+/** 十字臂长(屏幕像素)。加描边总跨度约 15px,命中放宽 8px 能盖住。 */
+const DEFECT_MARKER_ARM = 5
+/** 缺陷标记的描边:深色垫底让亮色在任何版图底色上都跳出来。 */
+const DEFECT_MARKER_HALO = 3.5
+const DEFECT_MARKER_STROKE = 1.5
+
+/**
+ * 选中的缺陷缩得太小时,额外画一个固定屏幕尺寸的定位环。
+ *
+ * 选中框的 3px 描边在整版视图下只有几个像素,用户按了「下一条」却看不出
+ * 画面里哪里变了。环是屏幕空间的,缩放时大小不变,和十字标记一样看得见。
+ * 半径和命中放宽一致:环画在哪,点哪就能选中。
+ */
+const DEFECT_TARGET_MIN_PX = 28
+const DEFECT_TARGET_RADIUS = 8
+
+/**
  * 缺陷图浮标的边长(屏幕像素),随缩放按比例缩小。
  * 缩到看整版时还挂一张大图会盖住大半张版图,所以下限压到 48;
  * 放大到 1:1 以上就封顶在 200,不跟着无限变大。
@@ -340,6 +365,10 @@ export function useAnnotationSvg(
 
     const normal: string[] = []
     const global: string[] = []
+    // 小于阈值的小框单独收集:它们要垫一层深色描边,而且画在框的上层
+    const markerHalo: string[] = []
+    const markerNormal: string[] = []
+    const markerGlobal: string[] = []
     let selected: Defect | null = null
     let selectedRect: Rect | null = null
 
@@ -368,13 +397,44 @@ export function useAnnotationSvg(
       const y = transform.y(rect.y)
       const right = transform.x(rect.x + rect.w)
       const bottom = transform.y(rect.y + rect.h)
-      ;(defect.pcsKey === 0 ? global : normal).push(`M${x} ${y}H${right}V${bottom}H${x}Z`)
+      if (
+        Math.abs(right - x) < DEFECT_MARKER_MIN_PX &&
+        Math.abs(bottom - y) < DEFECT_MARKER_MIN_PX
+      ) {
+        const cx = (x + right) / 2
+        const cy = (y + bottom) / 2
+        const cross =
+          `M${cx - DEFECT_MARKER_ARM} ${cy}H${cx + DEFECT_MARKER_ARM}` +
+          `M${cx} ${cy - DEFECT_MARKER_ARM}V${cy + DEFECT_MARKER_ARM}`
+        markerHalo.push(cross)
+        ;(defect.pcsKey === 0 ? markerGlobal : markerNormal).push(cross)
+      } else {
+        ;(defect.pcsKey === 0 ? global : normal).push(
+          `M${x} ${y}H${right}V${bottom}H${x}Z`,
+        )
+      }
     }
 
     const fragment = document.createDocumentFragment()
     if (normal.length > 0) fragment.appendChild(defectPath(normal.join(''), DEFECT_COLOR))
     if (global.length > 0) {
       fragment.appendChild(defectPath(global.join(''), DEFECT_GLOBAL_COLOR))
+    }
+    // 标记压在大框上层,深色垫底再画亮色
+    if (markerHalo.length > 0) {
+      fragment.appendChild(
+        defectPath(markerHalo.join(''), 'rgba(0, 0, 0, 0.7)', DEFECT_MARKER_HALO),
+      )
+    }
+    if (markerNormal.length > 0) {
+      fragment.appendChild(
+        defectPath(markerNormal.join(''), DEFECT_COLOR, DEFECT_MARKER_STROKE),
+      )
+    }
+    if (markerGlobal.length > 0) {
+      fragment.appendChild(
+        defectPath(markerGlobal.join(''), DEFECT_GLOBAL_COLOR, DEFECT_MARKER_STROKE),
+      )
     }
 
     if (selected && selectedRect) {
@@ -394,18 +454,53 @@ export function useAnnotationSvg(
       rect.setAttribute('stroke', color)
       rect.setAttribute('stroke-width', '3')
       fragment.appendChild(rect)
+
+      // 小框在屏幕上只有几个像素,选中态再粗的描边也看不出来。
+      // 补一个固定尺寸的定位环:深色垫底 + 亮色环 + 中心点。
+      if (Math.max(Math.abs(width), Math.abs(height)) < DEFECT_TARGET_MIN_PX) {
+        const cx = x + width / 2
+        const cy = y + height / 2
+        fragment.appendChild(
+          circle(cx, cy, DEFECT_TARGET_RADIUS, 'rgba(0, 0, 0, 0.7)', 4.5),
+        )
+        fragment.appendChild(circle(cx, cy, DEFECT_TARGET_RADIUS, color, 2))
+        fragment.appendChild(circle(cx, cy, 2.5, color, 0))
+      }
     }
 
     defectLayer.appendChild(fragment)
   }
 
-  function defectPath(d: string, color: string): SVGPathElement {
+  function defectPath(d: string, color: string, strokeWidth = 1): SVGPathElement {
     const element = document.createElementNS(SVG_NS, 'path')
     element.setAttribute('d', d)
     element.setAttribute('fill', 'none')
     element.setAttribute('stroke', color)
-    element.setAttribute('stroke-width', '1')
+    element.setAttribute('stroke-width', String(strokeWidth))
     element.setAttribute('stroke-opacity', '0.85')
+    element.setAttribute('stroke-linecap', 'round')
+    return element
+  }
+
+  /** `strokeWidth` 为 0 时画实心圆。 */
+  function circle(
+    cx: number,
+    cy: number,
+    radius: number,
+    color: string,
+    strokeWidth: number,
+  ): SVGCircleElement {
+    const element = document.createElementNS(SVG_NS, 'circle')
+    element.setAttribute('cx', String(cx))
+    element.setAttribute('cy', String(cy))
+    element.setAttribute('r', String(radius))
+    if (strokeWidth > 0) {
+      element.setAttribute('fill', 'none')
+      element.setAttribute('stroke', color)
+      element.setAttribute('stroke-width', String(strokeWidth))
+    } else {
+      element.setAttribute('fill', color)
+    }
     return element
   }
 

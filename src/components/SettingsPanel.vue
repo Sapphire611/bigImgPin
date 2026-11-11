@@ -97,12 +97,12 @@ async function clearCache() {
 
         <!--
           两套地址并排,因为数据落在哪套上不由本应用决定:旧数据导入旧 MinIO,
-          新数据导入新 MinIO。拉图时先试新、再试旧,用户不用为了换个数据包
-          先来改设置。
+          新数据导入新 MinIO。用哪套由缺陷文件自己声明,这里只负责把两套地址填对。
         -->
         <p class="hint">
-          点击缺陷时从这里取缺陷图。<b>新数据</b>一般在新 MinIO,<b>旧数据</b>在旧 MinIO;
-          会先试新、再试旧,命中哪套用哪套。
+          点击缺陷时从这里取缺陷图。缺陷文件自己声明数据在哪套上:
+          <code>local_describe_path</code> 是 <code>minio://</code> 的走<b>新 MinIO</b>,
+          是本地盘路径的走<b>旧 MinIO</b>。只请求对应的那一套。
         </p>
 
         <div class="endpoint">

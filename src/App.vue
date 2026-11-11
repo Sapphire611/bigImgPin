@@ -20,7 +20,7 @@ import {
 } from './osd/coords'
 import { useAnnotationSvg } from './osd/useAnnotationSvg'
 import { modeCursor, useViewer } from './osd/useViewer'
-import { minioBases, minioRevision } from './state/minioPrefs'
+import { minioBaseFor, minioBases, minioRevision } from './state/minioPrefs'
 import {
   pointToReference,
   referenceRotation,
@@ -570,6 +570,13 @@ function onKeyDown(event: KeyboardEvent) {
 
   if (!image.value) return
 
+  // 逐条浏览缺陷。不占用方向键 —— 那是用来微调标注框的。
+  if (defectSet.value && (event.key === 'PageDown' || event.key === 'PageUp')) {
+    stepDefect(event.key === 'PageDown' ? 1 : -1)
+    event.preventDefault()
+    return
+  }
+
   if (event.key === 'Delete' || event.key === 'Backspace') {
     if (selectedIds.value.size > 0) {
       annotations.removeRegions([...selectedIds.value])
@@ -825,23 +832,36 @@ function referenceCanvasSize(): { width: number; height: number } {
 }
 
 /**
+ * 缺陷框的命中判定往外放宽多少屏幕像素。
+ * 和叠加层的十字标记 / 选中定位环同尺寸:看得见的范围就是点得中的范围。
+ */
+const DEFECT_HIT_SLOP = 8
+
+/**
  * 命中最上面的缺陷框。缺陷按列表顺序绘制,所以从后往前找。
  *
  * 缺陷框可能按参考层角度转着画(见 state/referenceRotation.ts),点击点要先
  * 逆变换回原始坐标再比 —— 否则框在屏幕上转了 90°,点击还按老位置算。
+ *
+ * 命中范围按屏幕像素放宽:ROI 只有几十个图像像素,缩到看整版时按原始边界
+ * 点击根本点不中(何况画布上补了十字标记,标记本身也得能点)。
  */
 function findDefectAt(x: number, y: number): Defect | null {
   if (!image.value) return null
   const size = referenceCanvasSize()
   const point = pointToReference(x, y, referenceRotation.value, size.width, size.height)
+  const viewer = viewerApi.viewer.value
+  // zoomRatio 是「1 图像像素 = 多少屏幕像素」,取倒数把 4 屏幕像素换成图像单位
+  const ratio = viewer ? calcZoomRatio(viewer) : null
+  const slop = ratio && ratio > 0 ? DEFECT_HIT_SLOP / ratio : 0
   const list = defectSet.value?.defects ?? []
   for (let i = list.length - 1; i >= 0; i -= 1) {
     const defect = list[i]
     if (
-      point.x >= defect.x &&
-      point.x <= defect.x + defect.w &&
-      point.y >= defect.y &&
-      point.y <= defect.y + defect.h
+      point.x >= defect.x - slop &&
+      point.x <= defect.x + defect.w + slop &&
+      point.y >= defect.y - slop &&
+      point.y <= defect.y + defect.h + slop
     ) {
       return defect
     }
@@ -864,8 +884,12 @@ function selectDefect(defect: Defect, focus = false) {
 /**
  * 取选中缺陷的图片。
  *
- * 候选前缀和 MinIO 地址都可能有多个,第一次点击会挨个试;命中的那一组记在
- * `defectImageRoute` 里,后面点别的缺陷直接复用,不再重复探测。
+ * MinIO 地址由缺陷文件自己声明(`minioKind`):新数据只走新 MinIO,旧数据只走
+ * 旧 MinIO —— 别人的机器上未必两套都部署了,连不存在的那套只会白等超时。
+ * 只有文件完全没写来源时,才退回「两套都试」。
+ *
+ * 候选前缀可能有多组,第一次点击会挨个试;命中的那一组记在 `defectImageRoute` 里,
+ * 后面点别的缺陷直接复用,不再重复探测。
  *
  * 失败只在预览区里说,不弹全局横幅 —— 这多半是 MinIO 地址/前缀没对上,
  * 换一条缺陷或改完设置就会好,不是应用本身坏了。
@@ -879,12 +903,16 @@ async function loadDefectImage(defect: Defect) {
     return
   }
 
-  const bases = defectImageRoute ? [defectImageRoute.base] : minioBases()
+  const declared = set.minioKind ? [minioBaseFor(set.minioKind)] : minioBases()
+  const bases = declared.filter((base): base is string => base !== null)
   if (bases.length === 0) {
+    const which = set.minioKind === 'new' ? '新' : set.minioKind === 'old' ? '旧' : ''
     defectImage.value = {
       defectId: defect.id,
       status: 'error',
-      error: '还没有配置 MinIO 地址(设置 → 缺陷图片)',
+      error: which
+        ? `${which} MinIO 地址没有填好(设置 → 缺陷图片)`
+        : '还没有配置 MinIO 地址(设置 → 缺陷图片)',
     }
     return
   }
@@ -910,7 +938,15 @@ async function loadDefectImage(defect: Defect) {
     }
   } catch (error) {
     if (token !== defectImageToken) return
-    defectImage.value = { defectId: defect.id, status: 'error', error: String(error) }
+    // 失败时也带上一个地址:贴进浏览器就能看出是 404、超时还是别的问题,
+    // 比一屏「url → 错误」更容易操作。
+    const failure = api.asDefectImageFailure(error)
+    defectImage.value = {
+      defectId: defect.id,
+      status: 'error',
+      error: failure.message,
+      url: failure.url ?? undefined,
+    }
   }
 }
 
@@ -948,6 +984,26 @@ function focusDefect(defect: Defect) {
   viewer.viewport.panTo(bounds.getCenter(), true)
 }
 
+/**
+ * 逐条切换缺陷并定位。列表动辄几百条,靠肉眼找几十像素的 ROI 再点行太慢。
+ *
+ * 到两端就停住而不是绕回开头:评审时「已经到最后一条」必须看得出来,
+ * 静默绕回会让人以为后面还有。侧栏的序号和按钮禁用状态一起说明这件事。
+ */
+function stepDefect(delta: number) {
+  const list = defectSet.value?.defects ?? []
+  if (list.length === 0) return
+  const current = list.findIndex((defect) => defect.id === selectedDefectId.value)
+  const next =
+    current < 0
+      ? delta > 0
+        ? 0
+        : list.length - 1
+      : Math.min(Math.max(current + delta, 0), list.length - 1)
+  if (next === current) return
+  selectDefect(list[next], true)
+}
+
 function clearDefects() {
   defectSet.value = null
   selectedDefectId.value = null
@@ -973,11 +1029,14 @@ async function loadDefectFile(path: string) {
   try {
     const loaded = await api.loadDefects(path, layout.panelScale)
     defectSet.value = loaded
-    selectedDefectId.value = null
     // 换了一份结果,上一份命中的 MinIO 线路和预览都不再适用
     defectImage.value = null
     defectImageToken += 1
     defectImageRoute = null
+    // 直接定位第一条。缺陷 ROI 只有几十个图像像素,适应窗口时在画布上
+    // 几乎不可见 —— 加载完什么都不选,用户只会看到一片空白。
+    if (loaded.defects.length > 0) selectDefect(loaded.defects[0], true)
+    else selectedDefectId.value = null
     notice.value = loaded.defects.length
       ? `已加载 ${loaded.defects.length} 个缺陷(${loaded.productSerial} / ${loaded.sideIndex} 面)`
       : '这份结果里没有可显示的缺陷'
@@ -1212,6 +1271,7 @@ function rotateReference(delta: number) {
         @rename="annotations.renameRegion"
         @clear-regions="annotations.clearRegions"
         @select-defect="selectDefect($event, true)"
+        @step-defect="stepDefect"
         @clear-defects="clearDefects"
         @retry-defect-image="retryDefectImage"
         @open-settings="settingsOpen = true"

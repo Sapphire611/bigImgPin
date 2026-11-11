@@ -10,8 +10,10 @@
 //! `local_describe_path` 对不上(导入工具会改前缀),所以前端会传一组候选前缀,
 //! 这里按顺序逐个试,命中后把 `base` / `prefix` 返回给前端缓存。
 //!
-//! 旧数据在旧 MinIO(9102),新数据在新 MinIO(9104),所以 `bases` 也可能有多套;
-//! 候选前缀在外层、地址在内层:先用最可能的前缀把两套地址都试一遍,再换下一个前缀。
+//! 旧数据在旧 MinIO(9102),新数据在新 MinIO(9104)。正常一次只用一套 —— 前端
+//! 按缺陷文件里的 `local_describe_*` 判断好再传进来。只有文件没写来源时 `bases`
+//! 才有多套;候选前缀在外层、地址在内层:先用最可能的前缀把候选地址都试一遍,
+//! 再换下一个前缀。
 
 use std::collections::HashSet;
 use std::time::Duration;
@@ -63,6 +65,20 @@ pub struct DefectImage {
     pub prefix: String,
 }
 
+/// 取图失败时交给前端的东西。
+///
+/// 只给**一个** URL:候选可能有一串,但用户要做的是把它贴进浏览器看哪一环不通;
+/// 一屏「url → 错误」翻起来反而找不到能复制的那一条。取候选顺序里的第一个
+/// (最可能是对的);没有任何可用地址时没有 URL 可给。
+#[derive(Debug, Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DefectImageError {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub url: Option<String>,
+    /// 首个地址的失败原因(或配置类错误)。一句话,不再罗列全部候选。
+    pub message: String,
+}
+
 fn encode_key(key: &str) -> String {
     key.split('/')
         .filter(|segment| !segment.is_empty())
@@ -106,7 +122,7 @@ fn build_candidates(
 
     let mut seen = HashSet::new();
     let mut candidates = Vec::new();
-    // 前缀在外层:同一份前缀先把新旧两套地址都试掉,避免旧数据在新 MinIO 上
+    // 前缀在外层:同一份前缀先把所有候选地址都试掉,避免一份数据在错的地址上
     // 把每个前缀都白试一遍。
     for prefix in &prefixes {
         let key = if prefix.is_empty()
@@ -218,7 +234,7 @@ pub async fn fetch_defect_image(
     bucket: String,
     prefixes: Vec<String>,
     bases: Vec<String>,
-) -> Result<DefectImage, String> {
+) -> Result<DefectImage, DefectImageError> {
     let bucket = if bucket.trim().is_empty() {
         "deepiresults".to_string()
     } else {
@@ -226,18 +242,26 @@ pub async fn fetch_defect_image(
     };
     let candidates = build_candidates(&image, &bucket, &prefixes, &bases);
     if candidates.is_empty() {
-        return Err("没有可用的 MinIO 地址,请先在设置里填写 IP 和端口".into());
+        return Err(DefectImageError {
+            url: None,
+            message: "没有可用的 MinIO 地址,请先在设置里填写 IP 和端口".into(),
+        });
     }
 
     let client = reqwest::Client::builder()
         .connect_timeout(Duration::from_secs(2))
         .timeout(Duration::from_secs(10))
         .build()
-        .map_err(|error| format!("创建 HTTP 客户端失败:{error}"))?;
+        .map_err(|error| DefectImageError {
+            url: None,
+            message: format!("创建 HTTP 客户端失败:{error}"),
+        })?;
 
     let zip_like = is_zip_path(&image);
     let total = candidates.len();
-    let mut failures: Vec<String> = Vec::new();
+    // 失败时展示候选里的第一个:它最可能是对的,也是用户最先该验证的地址。
+    let first_url = candidates.first().map(|(url, _, _)| url.clone());
+    let mut first_error: Option<String> = None;
 
     for (url, base, prefix) in candidates {
         // zip 内图片要带头;本地展开式存储的 key 里也可能带 .zip 段,带头会 404,
@@ -262,23 +286,21 @@ pub async fn fetch_defect_image(
                 });
             }
             Err(error) => {
-                if failures.len() < 4 {
-                    failures.push(format!("{url} → {error}"));
+                if first_error.is_none() {
+                    first_error = Some(error);
                 }
             }
         }
     }
 
-    let more = if total > failures.len() {
-        format!("\n(共试了 {total} 个地址,只列出前 {} 个)", failures.len())
-    } else {
-        String::new()
-    };
-    Err(format!(
-        "缺陷图片没能加载:\n{}{}",
-        failures.join("\n"),
-        more
-    ))
+    let mut message = first_error.unwrap_or_else(|| "没有取到图片".to_string());
+    if total > 1 {
+        message.push_str(&format!("(共试了 {total} 个地址)"));
+    }
+    Err(DefectImageError {
+        url: first_url,
+        message,
+    })
 }
 
 #[cfg(test)]
@@ -361,5 +383,25 @@ mod tests {
     fn zip_paths_are_detected_case_insensitively() {
         assert!(is_zip_path("a/defect_package.ZIP/x.jpg"));
         assert!(!is_zip_path("a/defect_package/x.jpg"));
+    }
+
+    #[test]
+    fn defect_image_error_serializes_one_copyable_url() {
+        // 契约测试:前端从 reject 值里读 url 和 message。
+        // 字段名或形状变了,只会表现为「失败时不显示地址」,不报错。
+        let error = DefectImageError {
+            url: Some("http://127.0.0.1:9104/deepiresults/a.jpg".into()),
+            message: "HTTP 404(共试了 2 个地址)".into(),
+        };
+        let value = serde_json::to_value(error).unwrap();
+        assert_eq!(value["url"], "http://127.0.0.1:9104/deepiresults/a.jpg");
+        assert_eq!(value["message"], "HTTP 404(共试了 2 个地址)");
+
+        let value = serde_json::to_value(DefectImageError {
+            url: None,
+            message: "没有可用的 MinIO 地址".into(),
+        })
+        .unwrap();
+        assert!(value.get("url").is_none());
     }
 }

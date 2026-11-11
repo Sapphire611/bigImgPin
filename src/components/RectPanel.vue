@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, ref, type ComponentPublicInstance } from 'vue'
+import { computed, nextTick, ref, watch, type ComponentPublicInstance } from 'vue'
 
 import {
   COORD_DECIMALS_MAX,
@@ -44,6 +44,8 @@ const emit = defineEmits<{
   rename: [string, string]
   clearRegions: []
   selectDefect: [Defect]
+  /** 上一条 / 下一条缺陷,参数是 ±1 */
+  stepDefect: [number]
   clearDefects: []
   retryDefectImage: []
   openSettings: []
@@ -58,6 +60,31 @@ const emit = defineEmits<{
 function defectColor(defect: Defect): string {
   return defect.pcsKey === 0 ? '#ffa940' : '#ff4d4f'
 }
+
+/** 当前选中缺陷在列表里的序号(0 起),没选中或不在列表里是 -1。 */
+const selectedDefectIndex = computed(() => {
+  const id = props.selectedDefectId
+  if (!id || !props.defectSet) return -1
+  return props.defectSet.defects.findIndex((defect) => defect.id === id)
+})
+
+/**
+ * 用键盘或按钮逐条切换时,把对应的行滚进视野。
+ *
+ * 列表最多滚 300px,几百条里选中的那一行很可能不在视野内 —— 画布已经
+ * 跳过去了,侧栏却还停在原位,人会对不上自己在看哪一条。
+ */
+const defectListEl = ref<HTMLUListElement | null>(null)
+watch(
+  () => props.selectedDefectId,
+  async (id) => {
+    if (!id) return
+    await nextTick()
+    defectListEl.value?.querySelector<HTMLElement>('.selected')?.scrollIntoView({
+      block: 'nearest',
+    })
+  },
+)
 
 /**
  * 点一行。Ctrl / Cmd 是加减选,普通点是单选。
@@ -402,9 +429,38 @@ function loadFrom(region: Region) {
         {{ defectSet.productSerial }} · {{ defectSet.sideIndex }} 面 ·
         panel {{ defectSet.panelId }}
       </p>
-      <p class="hint">框只可选中,不可编辑;点击一行定位到该缺陷。</p>
+      <p class="hint">
+        框只可选中,不可编辑;点击一行定位到该缺陷。PageUp / PageDown 可逐条切换。
+      </p>
 
-      <ul class="list defects">
+      <!--
+        逐条浏览放在列表上方而不是塞进预览区:预览只有在选中之后才出现,
+        而「从头看起」恰恰是还没选中时要做的事。
+      -->
+      <div class="defect-nav">
+        <button
+          class="mini"
+          :disabled="selectedDefectIndex === 0"
+          title="上一条缺陷(PageUp)"
+          @click="emit('stepDefect', -1)"
+        >
+          上一条
+        </button>
+        <span class="nav-pos">
+          {{ selectedDefectIndex >= 0 ? selectedDefectIndex + 1 : '–' }} /
+          {{ defectSet.defects.length }}
+        </span>
+        <button
+          class="mini"
+          :disabled="selectedDefectIndex === defectSet.defects.length - 1"
+          title="下一条缺陷(PageDown)"
+          @click="emit('stepDefect', 1)"
+        >
+          下一条
+        </button>
+      </div>
+
+      <ul ref="defectListEl" class="list defects">
         <li
           v-for="(defect, index) in defectSet.defects"
           :key="`${defect.id}-${index}`"
@@ -476,10 +532,12 @@ function loadFrom(region: Region) {
           实际命中的 URL 单独给一行,而不是只挂在图片的 title 上:
           排查「这台机器到底能不能打开」时,得把地址贴进浏览器,title 选不中。
           user-select: all 让单击就整条选中,直接 Ctrl+C。
+          取不到图时也给这一行,而且只给一个地址 —— 那时用户要做的正是把它
+          贴进浏览器,看是 404、超时还是别的;一屏候选地址反而找不到该复制哪条。
         -->
         <p
           v-if="
-            defectImage?.status === 'ready' &&
+            (defectImage?.status === 'ready' || defectImage?.status === 'error') &&
             defectImage.url &&
             defectImage.defectId === selectedDefect.id
           "
@@ -838,6 +896,22 @@ button.mini.danger:hover:not(:disabled) {
 /* 缺陷可能几百条,给列表一个自己的高度上限,别把下面的导出按钮顶出视野 */
 .list.defects {
   max-height: 300px;
+}
+
+/* 逐条浏览:序号夹在两个按钮中间,等宽数字避免切换时宽度跳动 */
+.defect-nav {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  margin: 2px 0;
+}
+
+.defect-nav .nav-pos {
+  margin: 0 auto;
+  color: var(--text-faint);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
 }
 
 /* 缺陷图预览。宽度跟着 268px 面板走,高度封顶,别把下面的导出按钮顶走 */

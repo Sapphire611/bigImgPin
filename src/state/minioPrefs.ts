@@ -1,8 +1,11 @@
 /**
  * 缺陷图片的 MinIO 地址。
  *
- * 旧数据导进旧 MinIO(默认 9102),新数据导进新 MinIO(默认 9104),两套都配:
- * 拉图时先试新、再试旧,命中哪套用哪套。这样换个数据包不用先想起来去改设置。
+ * 旧数据导进旧 MinIO(默认 9102),新数据导进新 MinIO(默认 9104),两套都配。
+ * 用哪套由缺陷文件自己声明:`local_describe_*` 是 `minio://` 的是新数据,
+ * 是本地盘路径的是旧数据。只请求声明的那一套 —— 别人的机器上未必两套都部署了,
+ * 去连不存在的那套只会白等超时。只有文件里两个字段都没有时,才退回「先新后旧」
+ * 地试一次(见 `minioBases`)。
  *
  * 地址只存 IP/端口,不存 bucket —— bucket 由面板 JSON 的 `minio://` 路径给出,
  * 见 `src-tauri/src/defects.rs`。
@@ -79,14 +82,20 @@ function endpoint(ip: string, port: string): string | null {
   return `http://${host}:${number}`
 }
 
+/** 文件声明了属于哪套时,只走这一套;对应地址没填好时返回 null。 */
+export function minioBaseFor(kind: 'new' | 'old'): string | null {
+  return kind === 'new'
+    ? endpoint(minioNewIp.value, minioNewPort.value)
+    : endpoint(minioOldIp.value, minioOldPort.value)
+}
+
 /**
- * 拉图时按顺序尝试的地址。新 MinIO 在前:新数据是当前主用格式。
- * 两套填成一样时会去重,避免同样的请求打两遍。
+ * 文件没写来源时的兜底地址,新 MinIO 在前。两套填成一样时会去重,
+ * 避免同样的请求打两遍。正常路径不应该走到这里 —— 只认文件声明的地址。
  */
 export function minioBases(): string[] {
-  const bases = [
-    endpoint(minioNewIp.value, minioNewPort.value),
-    endpoint(minioOldIp.value, minioOldPort.value),
-  ].filter((base): base is string => base !== null)
+  const bases = [minioBaseFor('new'), minioBaseFor('old')].filter(
+    (base): base is string => base !== null,
+  )
   return [...new Set(bases)]
 }

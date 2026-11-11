@@ -20,6 +20,7 @@ npm run build            # vue-tsc --noEmit && vite build
 npx vue-tsc --noEmit     # 只做类型检查(前端没有 test runner,这是最轻的验证手段)
 npx tauri build          # 打包。没给签名私钥会以退出码 1 结束(安装包其实已经出来了)
 npm run release          # 发版:签名构建 + 生成 latest.json + 建 GitHub Release
+npm run portable         # 免安装便携包:release exe + vips + README → zip
 
 # Rust 单元测试(在 src-tauri/ 下,或在仓库根加 --manifest-path src-tauri/Cargo.toml)
 cargo test
@@ -273,6 +274,15 @@ App 里的判断顺序是**先手柄、后框**:手柄压在选中框的边框�
 
 **具体操作步骤**(发版前查什么、怎么验证更新真的生效、常见故障对照)在
 `.claude/skills/release/SKILL.md`,本节只留设计决策和坑。
+
+**免安装便携包**走另一条命令:`npm run portable`。它只跑
+`tauri build --no-bundle`,所以不生成安装器、也不需要签名私钥;然后把
+release exe 和 `bundle.resources` 里的 vips 树复制进一个文件夹,压成
+`src-tauri/target/portable/bigImgPin-<版本>-portable-win64.zip`。
+exe 本身和安装包里的**是同一个**,差别只在分发形态:没有注册表/快捷方式,
+不会替用户装 WebView2,自动更新点了会装成正式版而不是原地替换。
+资源清单读的是 `tauri.conf.json`,加资源不用改脚本;但脚本目前只支持
+`{ 源: 目标 }` 映射形式。
 
 发版就是两步:
 
