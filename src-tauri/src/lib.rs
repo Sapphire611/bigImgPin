@@ -13,23 +13,16 @@ use tauri::Emitter;
 
 /// 打开 WebView 的开发者工具。
 ///
-/// Tauri **不会**自动给 F12 / Ctrl+Shift+I 绑定快捷键 —— debug 构建里 devtools
-/// 是编进去了,但得有人主动调 `open_devtools()`。前端按键后调这个命令。
+/// Tauri **不会**自动给 F12 / Ctrl+Shift+I 绑定快捷键,得有人主动调
+/// `open_devtools()`。前端按键后调这个命令。
 ///
-/// release 构建没编 devtools,命令仍然注册着,返回一句明确的错误,
-/// 而不是让前端拿到「命令不存在」这种看不出原因的消息。
+/// Cargo.toml 里给 tauri 开了 `devtools` 特性,所以 **release 构建也能打开** ——
+/// 现场排查(比如别的电脑取不到 MinIO 图片、网络请求是什么样)时只有这一条路。
+/// 默认的 release 构建会把这段能力裁掉,`open_devtools` 直接是空实现。
 #[tauri::command]
 fn open_devtools(window: tauri::WebviewWindow) -> Result<(), String> {
-    #[cfg(debug_assertions)]
-    {
-        window.open_devtools();
-        Ok(())
-    }
-    #[cfg(not(debug_assertions))]
-    {
-        let _ = window;
-        Err("开发者工具只在 debug 构建里可用".into())
-    }
+    window.open_devtools();
+    Ok(())
 }
 
 /// 装一个全局 rustls crypto provider。

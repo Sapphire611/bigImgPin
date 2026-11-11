@@ -472,6 +472,24 @@ function loadFrom(region: Region) {
           :title="defectImage.url"
         />
 
+        <!--
+          实际命中的 URL 单独给一行,而不是只挂在图片的 title 上:
+          排查「这台机器到底能不能打开」时,得把地址贴进浏览器,title 选不中。
+          user-select: all 让单击就整条选中,直接 Ctrl+C。
+        -->
+        <p
+          v-if="
+            defectImage?.status === 'ready' &&
+            defectImage.url &&
+            defectImage.defectId === selectedDefect.id
+          "
+          class="url"
+          :title="defectImage.url"
+        >
+          <span class="url-label">请求地址</span>
+          <code class="url-text">{{ defectImage.url }}</code>
+        </p>
+
         <p v-if="selectedDefect.image" class="path mono" :title="selectedDefect.image">
           {{ selectedDefect.image }}
         </p>
@@ -874,6 +892,9 @@ button.mini.retry {
   word-break: break-all;
   max-height: 120px;
   overflow-y: auto;
+  /* 全局关掉了文字选中(styles.css),但这里的 URL 正是要复制出去验证的 */
+  user-select: text;
+  -webkit-user-select: text;
 }
 
 .preview-img {
@@ -883,6 +904,28 @@ button.mini.retry {
   background: var(--stage);
   border: 1px solid var(--border);
   border-radius: var(--r-sm);
+}
+
+/* 实际请求地址:单击整条选中,方便复制到浏览器验证是否可达 */
+.url {
+  display: flex;
+  gap: 6px;
+  margin: 0;
+  font-size: 10px;
+  line-height: 1.5;
+  color: var(--text-faint);
+}
+
+.url-label {
+  flex-shrink: 0;
+}
+
+.url-text {
+  min-width: 0;
+  color: var(--text-dim);
+  word-break: break-all;
+  user-select: all;
+  -webkit-user-select: all;
 }
 
 /* 图片路径是排查用的读数,长了省略,悬停看全 */
