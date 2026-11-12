@@ -166,6 +166,14 @@ async function publishGitee(manifest, exePath, exeName, branch) {
         prerelease: false,
       }),
     })
+  } else {
+    // 复用已有发行版时把说明同步过来:如果第一次是用 --gitee-only 补发的、
+    // 没带 --notes-file,发行版和 manifest 的说明会退化成 "bigImgPin v0.4.3"
+    await giteeApi(`/releases/${release.id}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ tag_name: tag, name: tag, body: notes, prerelease: false }),
+    })
   }
 
   // 附件已存在就跳过:重跑时不重复占 1GB 的仓库配额
