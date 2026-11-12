@@ -193,7 +193,10 @@ export interface AvailableUpdate {
 
 /** 已是最新版时返回 null。 */
 export async function checkForUpdate(): Promise<AvailableUpdate | null> {
-  const update = await check()
+  // 国内源(Gitee)在前、GitHub 在后,插件会按顺序试。单次请求给个上限:
+  // 不设的话,某个源连接被挂住时「检查更新」会一直转圈,后台那次也会吊着。
+  // latest.json 只有几 KB,15 秒足够。
+  const update = await check({ timeout: 15_000 })
   if (!update) return null
 
   let downloadedBytes = 0

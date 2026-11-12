@@ -19,7 +19,7 @@ npm run dev:web          # 只起 vite。纯浏览器里没有 Tauri API,invoke 
 npm run build            # vue-tsc --noEmit && vite build
 npx vue-tsc --noEmit     # 只做类型检查(前端没有 test runner,这是最轻的验证手段)
 npx tauri build          # 打包。没给签名私钥会以退出码 1 结束(安装包其实已经出来了)
-npm run release          # 发版:签名构建 + 生成 latest.json + 建 GitHub Release
+npm run release          # 发版:签名构建 + 两份 latest.json + Gitee 镜像 + GitHub Release
 npm run portable         # 免安装便携包:release exe + vips + README → zip
 
 # Rust 单元测试(在 src-tauri/ 下,或在仓库根加 --manifest-path src-tauri/Cargo.toml)
@@ -253,9 +253,20 @@ App 里的判断顺序是**先手柄、后框**:手柄压在选中框的边框�
 ## 自动更新与发版
 
 用官方 `tauri-plugin-updater`,**全量包**(NSIS 约 15MB,里面 10MB 是压过的 vips 树)。
-更新源是 GitHub Releases 上的 `latest.json`,配在 `tauri.conf.json` 的
-`plugins.updater.endpoints`。没做按文件增量:省下的那 12MB 不值当自己写一套
-下载/替换/回滚,还得处理 Windows 上自替换的坑。
+更新源有**两份** `latest.json`,顺序在 `tauri.conf.json` 的
+`plugins.updater.endpoints` 里:Gitee 在前(国内快),GitHub 在后(兜底)。
+没做按文件增量:省下的那 12MB 不值当自己写一套下载/替换/回滚,还得处理
+Windows 上自替换的坑。
+
+两份 manifest 的 `version` / `notes` / `signature` 完全一样,只有 `platforms.*.url`
+不同 —— **updater 只对「检查」做多源回退,下载不换源**。所以谁提供 manifest,
+谁就必须提供能下到的安装包地址:Gitee 那份指向 Gitee 发行版附件,GitHub 那份
+指向 GitHub Release 资产。不能只发一份、让两个源共用。
+
+Gitee 侧只放更新文件、不镜像源码:公开仓库 `Sapphire611/big-img-pin-update` 的
+根目录 `latest.json`(客户端读 `raw/HEAD/latest.json`)+ 同名 tag 的发行版附件。
+免费账号限制:单附件 100MB、单仓库附件总量 1GB,15MB 的安装包够放几十个版本;
+到头之前要删旧发行版的附件腾地方(客户端只需要最新那份 manifest)。
 
 流程:**启动 3 秒后静默检查 → 后台下载 → 弹窗 → 用户点「立即重启」→ 安装 → 自动开回新版**。
 前端逻辑全在 `src/components/UpdatePrompt.vue`,Rust 侧只注册插件(下载、验签、调起
@@ -291,15 +302,25 @@ exe 本身和安装包里的**是同一个**,差别只在分发形态:没有注�
 npm run release -- --notes-file /tmp/说明.md
 ```
 
+首次发版前还要在 Gitee 建一个公开仓库 `big-img-pin-update`,初始化 README 即可
+(只放 `latest.json`,不要放源码)。
+
 说明文本走**文件**而不是 `--notes`:多行参数会在 npm → shell 那段被按换行拆开,
 脚本只拿到第一行且不报错(v0.2.0 踩过,更新弹窗里只剩半句话)。
 
-验证时注意 `releases/latest/download/latest.json` **走 CDN 缓存**,刚重传的资产
-不会立刻生效;要确认内容得用 `gh api .../releases/assets/<id>` 绕开它。
+验证时注意 GitHub 的 `releases/latest/download/latest.json` 和 Gitee 的
+`raw/HEAD/latest.json` **都走 CDN 缓存**,刚传的资产不会立刻生效。GitHub 要确认
+内容得用 `gh api .../releases/assets/<id>` 绕开;Gitee 的读回校验走 contents API。
 
-`scripts/release.mjs` 会带着私钥路径构建、生成 `latest.json`、用 `gh` 建 Release 上传。
-前置:装 GitHub CLI(`winget install --id GitHub.cli`)并 `gh auth login`。
-加 `--dry-run` 可以从现有产物生成 `latest.json` 并列出要传的文件,不构建也不上传。
+`scripts/release.mjs` 会先查 GitHub CLI、签名私钥和 Gitee 令牌,再签名构建、
+生成两份 `latest.json`、发 Gitee(发行版 + 附件 + manifest)、最后用 `gh` 建
+GitHub Release。前置:装 GitHub CLI(`winget install --id GitHub.cli`)并
+`gh auth login`;Gitee 在 设置 → 私人令牌 生成一个(勾选 `projects`),存到
+`~/.gitee/bigimgpin.token` 或设成环境变量 `GITEE_TOKEN`。
+Gitee 那步失败会整次中止,不发 GitHub —— 否则 Gitee 源会停在旧版本,而客户端
+先查 Gitee,解析到旧版本就直接结束了。
+加 `--dry-run` 可以从现有产物生成两份 manifest 并列出要传的文件,不构建也不上传。
+GitHub 已经发过、只想补国内源时加 `--gitee-only`:不构建、不查 `gh`/私钥,只发 Gitee。
 
 **`createUpdaterArtifacts` 开着但没给私钥时,`tauri build` 会以退出码 1 结束** ——
 安装包(msi/nsis)照样产出,只是没有 `.nsis.zip` 和 `.sig`。报错只有一行
