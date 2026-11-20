@@ -86,6 +86,23 @@ const hasPcs = computed(() => (pcsLayout.value?.pcs.length ?? 0) > 0)
 const defectSet = ref<DefectSet | null>(null)
 const selectedDefectId = ref<string | null>(null)
 
+/**
+ * PCS 序号 → 料号坐标(tid,如 `X1Y1`)。
+ *
+ * 缺陷文件只写 `pcs_info` 的 key,它和 PCS 布局里 `single_pcs_list[].id` 是
+ * 同一个编号;人在板子上找位置靠的却是 tid。用 Map 而不是每行去 `find`:
+ * 缺陷上千条、PCS 上千个时,列表滚动会变成几十万次比较。
+ *
+ * 对不上编号(布局是另一版、或 id 缺失)时就不显示 —— 不拿序号冒充坐标。
+ */
+const pcsTids = computed(() => {
+  const map = new Map<number, string>()
+  for (const box of pcsLayout.value?.pcs ?? []) {
+    if (box.tid) map.set(box.id, box.tid)
+  }
+  return map
+})
+
 /** 画布上有 PCS 或缺陷,旋转按钮才有意义 */
 const hasReference = computed(
   () => hasPcs.value || (defectSet.value?.defects.length ?? 0) > 0,
@@ -124,9 +141,10 @@ watch(guides, (value) => overlay.setGuides(value))
 watch([pcsLayout, pcsVisible], () => {
   overlay.setPcs(pcsVisible.value && pcsLayout.value ? pcsLayout.value.pcs : [])
 })
-// 缺陷和它的选中项一起交给叠加层 —— 拆成两次调用会多画一帧
-watch([defectSet, selectedDefectId], () => {
-  overlay.setDefects(defectSet.value?.defects ?? [], selectedDefectId.value)
+// 缺陷和它的选中项一起交给叠加层 —— 拆成两次调用会多画一帧。
+// 料号坐标表也跟着走:画布上的选中标签要和右侧列表显示同一个 `X1Y1`。
+watch([defectSet, selectedDefectId, pcsTids], () => {
+  overlay.setDefects(defectSet.value?.defects ?? [], selectedDefectId.value, pcsTids.value)
 })
 // 缺陷图到了/失败了都重画浮标。浮标只认 defectId 与选中项相同的那一张,
 // 所以这里不需要再判断一次选中状态。
@@ -1258,6 +1276,7 @@ function rotateReference(delta: number) {
         :guides="guides"
         :selected-ids="selectedIds"
         :defect-set="defectSet"
+        :pcs-tids="pcsTids"
         :selected-defect-id="selectedDefectId"
         :selected-defect="selectedDefect"
         :defect-image="defectImage"

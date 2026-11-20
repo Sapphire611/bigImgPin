@@ -131,6 +131,8 @@ export function useAnnotationSvg(
   let regions: Region[] = []
   let pcs: PcsBox[] = []
   let defects: Defect[] = []
+  /** PCS 序号 → 料号坐标(tid,如 X1Y1)。画布上的选中标签和右侧列表用同一份。 */
+  let pcsTids: Map<number, string> = new Map()
   /** 参考层(PCS/缺陷)的旋转角。只影响这两层,标注和网格始终在图像坐标系里。 */
   let referenceRotationDegrees = 0
   /** 参考坐标画布的尺寸(gerber_size × panelScale),旋转绕它的中心。 */
@@ -752,7 +754,15 @@ export function useAnnotationSvg(
     label.setAttribute('stroke', 'rgba(0, 0, 0, 0.65)')
     label.setAttribute('stroke-width', '3')
     label.setAttribute('paint-order', 'stroke')
-    const pcsText = selected.pcsKey === 0 ? '全局点' : `PCS ${selected.pcsKey}`
+    // 料号坐标跟 PCS 序号一起给:只写「PCS 10」的话,人还得回列表里
+    // 再查一次这个 10 是板上的哪一颗。对不上编号时退回只显示序号。
+    const tid = selected.pcsKey === 0 ? null : (pcsTids.get(selected.pcsKey) ?? null)
+    const pcsText =
+      selected.pcsKey === 0
+        ? '全局点'
+        : tid
+          ? `PCS ${selected.pcsKey} · ${tid}`
+          : `PCS ${selected.pcsKey}`
     const labelText = selected.label ? `${selected.code} ${selected.label}` : selected.code
     label.textContent = `${pcsText} · ${labelText} · #${selected.defectIndex}`
     fragment.appendChild(label)
@@ -871,10 +881,14 @@ export function useAnnotationSvg(
       referenceCanvasHeight = canvasHeight
       draw()
     },
-    /** 缺陷和选中项一起传:选中变化只触发一次重绘 */
-    setDefects(next: Defect[], selectedId: string | null) {
+    /**
+     * 缺陷、选中项和料号坐标表一起传 —— 三样都参与选中标签的绘制,
+     * 分几次 set 会多画几帧,标签会闪。
+     */
+    setDefects(next: Defect[], selectedId: string | null, tids: Map<number, string>) {
       defects = next
       selectedDefectId = selectedId
+      pcsTids = tids
       draw()
     },
     /**

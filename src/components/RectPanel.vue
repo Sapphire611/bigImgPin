@@ -29,6 +29,8 @@ const props = defineProps<{
   selectedDefectId: string | null
   /** 当前选中的那条缺陷,图片预览用 */
   selectedDefect: Defect | null
+  /** PCS 序号 → 料号坐标(tid,如 X1Y1),来自当前图的 PCS 布局 */
+  pcsTids: Map<number, string>
   /** 缺陷图的加载状态。可能属于上一条缺陷,用 defectId 对一下 */
   defectImage: DefectImageState | null
   imageWidth: number
@@ -59,6 +61,28 @@ const emit = defineEmits<{
 /** 和叠加层保持一致:全局点琥珀色,板内缺陷红色。 */
 function defectColor(defect: Defect): string {
   return defect.pcsKey === 0 ? '#ffa940' : '#ff4d4f'
+}
+
+/**
+ * 这条缺陷所属 PCS 的料号坐标(如 `X1Y1`)。
+ *
+ * 全局点没有 PCS;布局里编号对不上时也返回 null —— 宁可只显示序号,
+ * 也不拿别的 PCS 的坐标糊弄过去。
+ */
+function pcsTid(defect: Defect): string | null {
+  return defect.pcsKey === 0 ? null : (props.pcsTids.get(defect.pcsKey) ?? null)
+}
+
+/** 行悬停提示。坐标对不上时只写 PCS 序号,不补别的 PCS 的坐标。 */
+function defectTitle(defect: Defect): string {
+  const tid = pcsTid(defect)
+  const pcs =
+    defect.pcsKey === 0
+      ? '全局点'
+      : tid
+        ? `PCS ${defect.pcsKey}(${tid})`
+        : `PCS ${defect.pcsKey}`
+  return `${pcs} · ${defect.location} · ${formatCoord(defect.x)}, ${formatCoord(defect.y)} · ${defect.id}`
 }
 
 /** 当前选中缺陷在列表里的序号(0 起),没选中或不在列表里是 -1。 */
@@ -465,7 +489,7 @@ function loadFrom(region: Region) {
           v-for="(defect, index) in defectSet.defects"
           :key="`${defect.id}-${index}`"
           :class="{ selected: defect.id === selectedDefectId }"
-          :title="`${defect.location} · ${formatCoord(defect.x)}, ${formatCoord(defect.y)} · ${defect.id}`"
+          :title="defectTitle(defect)"
           @click="emit('selectDefect', defect)"
         >
           <span class="dot" :style="{ background: defectColor(defect) }" />
@@ -476,6 +500,14 @@ function loadFrom(region: Region) {
               {{ defect.label }}
               <span class="pcs-chip" :class="{ global: defect.pcsKey === 0 }">
                 {{ defect.pcsKey === 0 ? 'PCS 0 · 全局点' : `PCS ${defect.pcsKey}` }}
+              </span>
+              <!--
+                料号坐标和 PCS 序号是两个维度:序号是上游文件里的编号,
+                坐标(X1Y2)才是人在板子上找位置用的。分成两个 chip,
+                免得读成一串「PCS X1Y2」这样的混合编号。
+              -->
+              <span v-if="pcsTid(defect)" class="pcs-tid" title="料号坐标">
+                {{ pcsTid(defect) }}
               </span>
             </span>
             <span class="size">
@@ -891,6 +923,21 @@ button.mini.danger:hover:not(:disabled) {
 .pcs-chip.global {
   border-color: var(--warn-text);
   color: var(--warn-text);
+}
+
+/* 料号坐标用正文色 + 更实的边:它比 PCS 序号更常用 —— 看缺陷时先找 X1Y2,
+   序号只是拿来和文件对账的。仍然保持中性灰,不引入新的颜色语义。 */
+.pcs-tid {
+  display: inline-block;
+  margin-left: 4px;
+  padding: 0 5px;
+  border-radius: 3px;
+  border: 1px solid var(--border-strong);
+  background: var(--stage);
+  color: var(--text);
+  font-family: var(--font-mono);
+  font-size: 10px;
+  line-height: 1.5;
 }
 
 /* 缺陷可能几百条,给列表一个自己的高度上限,别把下面的导出按钮顶出视野 */

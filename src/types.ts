@@ -82,7 +82,7 @@ export interface Region extends Rect {
  * 撤销和落盘,所以单独一个类型,不和 Region 混用。
  */
 export interface PcsBox extends Rect {
-  /** `single_pcs_list[].id`,列表序号,不再画在框上 */
+  /** `single_pcs_list[].id`,列表序号,不再画在框上。缺陷的 `pcsKey` 用的就是这套编号。 */
   id: number
   /** 料号/拼板编号,用来配色并显示在框中央。上游有 `"p_13"`/`"A30"` 也有数字 `0` */
   tid: string
@@ -115,7 +115,7 @@ export interface Defect extends Rect {
   code: string
   label: string
   location: string
-  /** `pcs_info` 的 key;0 表示 `panel_info` 里的全局点 */
+  /** `pcs_info` 的 key,等于 PCS 布局里的 `PcsBox.id`;0 表示 `panel_info` 里的全局点 */
   pcsKey: number
   /**
    * 第一张缺陷图的 key,相对面板目录(绝对 URL 已去掉主机和 bucket)。
